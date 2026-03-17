@@ -5,3 +5,6 @@ A web application for building and hosting AI agents. Build, test, debug, and in
 ## Tech Stack
 
 - Elixir / Phoenix LiveView
+- PostgreSQL
+- Oban (background jobs and scheduling)
+- Tailwind CSS
