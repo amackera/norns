@@ -1,99 +1,138 @@
-# Plan: Workflow Engine
+# Plan: Lua Workflow Engine
 
 **Status: NOT STARTED**
 
 ## Context
 
-The thin slice works: trigger → single LLM call → output. But an "agent" that makes one API call isn't an agent — it's a function. The next step is a workflow engine that can execute multi-step workflows, where each step is either deterministic (HTTP call, shell command, data transform) or LLM-based (summarize, classify, extract).
+The thin slice works: trigger → single LLM call → output. But an "agent" that makes one API call isn't an agent — it's a function. The next step is a workflow engine that can execute multi-step Lua scripts, where each step is either deterministic (HTTP call, data transform) or LLM-based (summarize, classify, extract).
 
-This engine is the foundation that the chat builder will eventually generate code for. We need to understand what generated workflows look like by hand-writing a few first.
+This engine is the foundation that the chat builder will eventually generate Lua scripts for. We need to understand what generated workflows look like by hand-writing a few first.
 
-## Product Direction
+### Why Lua (not Elixir modules, not JSON graphs)
 
-- **The product is the chat-based workflow builder**, not the engine
-- **Integrations are third-party** — use Nango/Composio or plain HTTP, build nothing ourselves
-- **Workflows are Elixir modules** — real code with loops/conditionals, not JSON config
-- **LLM steps are just another action type** — the builder decides when to emit them
-- **The engine ships first**, chat builder comes later once we know what good workflows look like
+The builder LLM generates workflows at runtime. This rules out:
+- **Elixir modules** — unsandboxable. LLM-generated Elixir has access to `:os.cmd`, `System.cmd`, file I/O, network, etc.
+- **JSON/YAML step graphs** — too limited. Representing loops, conditionals, and variables in data means reinventing a bad programming language.
+
+Lua via luerl (pure Erlang Lua 5.3 VM) gives us:
+- Real control flow in a language LLMs are good at generating
+- Sandboxed by architecture — only explicitly exposed host functions are callable
+- Zero serialization cost on the BEAM — no NIFs, no ports
+- VM state is an immutable Erlang term — checkpointable
+
+We use the `lua` hex package (wraps luerl) for the Elixir API.
 
 ## What To Build
 
-### 1. Workflow Behaviour
+### 1. Lua Runtime Module
 
-`lib/norns/workflow.ex`
+`lib/norns/workflow/runtime.ex`
 
-A behaviour that workflow modules implement, plus macros for step primitives.
+Wraps the `lua` hex package. Responsibilities:
+- Initialize a sandboxed Lua VM with host functions loaded
+- Execute a Lua script string within the VM
+- Enforce resource limits (max_reductions, max_time via luerl_sandbox)
+- Capture and format errors for feedback to the builder LLM
 
 ```elixir
-defmodule Norns.Workflow do
-  @callback execute(context :: map()) :: {:ok, any()} | {:error, any()}
+defmodule Norns.Workflow.Runtime do
+  def execute(script, state, context) do
+    Lua.new()
+    |> Lua.load_api(Norns.Workflow.API)
+    |> Lua.set!("state", state)
+    |> Lua.set!("ctx", context)
+    |> Lua.eval!(script)
+  end
 end
 ```
 
-When you `use Norns.Workflow`, you get helper functions that wrap each action in event logging:
+### 2. Host API Module
 
-- `llm(ctx, prompt)` — call the LLM, log the request/response as a RunEvent
-- `http(ctx, method, url, opts)` — make an HTTP request, log it
-- `shell(ctx, command)` — run a shell command, log it
-- `transform(ctx, name, func)` — run an arbitrary function, log input/output
+`lib/norns/workflow/api.ex`
 
-Every primitive logs a RunEvent with the step type, input, output, and timing. This is the audit trail — you can look at any run and see exactly what happened at each step.
+Elixir module using `deflua` to expose functions to Lua scripts:
 
-### 2. Workflow-Aware Runner
+```elixir
+defmodule Norns.Workflow.API do
+  use Lua.API
+
+  deflua call_llm(prompt, opts) do
+    # Call Anthropic API, log RunEvent, return response
+  end
+
+  deflua http(method, url, body) do
+    # Make HTTP request, log RunEvent, return response
+  end
+
+  deflua store(key, value) do
+    # Persist key-value pair, log RunEvent
+  end
+
+  deflua emit(value) do
+    # Set workflow output, log RunEvent
+  end
+
+  deflua interrupt(payload) do
+    # Pause workflow, checkpoint VM state, surface payload to caller
+  end
+end
+```
+
+Every function logs a RunEvent before returning. This is the audit trail and the replay cache.
+
+### 3. Checkpointing and Durability
+
+Each side-effectful host function call:
+1. Logs a RunEvent with type, input, and output
+2. On replay: checks if a RunEvent already exists for this sequence number → returns cached result instead of re-executing
+
+The Lua VM state can optionally be serialized to the run's `state` column between steps for exact resume semantics.
+
+### 4. Workflow-Aware Runner
 
 Update `Norns.Agents.Runner` to:
+- Check if the agent has a `workflow_script`
+- If yes: pass the script to `Workflow.Runtime.execute/3`
+- If no: fall back to the current single-LLM-call behavior
+- Handle the `interrupt` case: save VM state, set run status to `waiting`
+- Handle resume: restore VM state, continue execution
 
-- Look up the agent's workflow module
-- Call `WorkflowModule.execute(context)` instead of making a single LLM call
-- The context contains: agent, tenant, input, run, and a way to log events
-- Fall back to the current single-LLM-call behavior if no workflow module is set
+### 5. Agent Schema Change
 
-### 3. Agent Schema Change
-
-Add `workflow_module` (string) to agents. This is the module name that implements the workflow (e.g. `"Norns.Workflows.ReleaseNotes"`). Nullable — agents without a workflow module use the legacy single-prompt path.
+Add `workflow_script` (text) to agents. This is the Lua source code. Nullable — agents without a script use the legacy single-prompt path.
 
 Migration: add column, no data backfill needed.
 
-### 4. Two Concrete Workflows
+### 6. Two Concrete Workflows
 
 **a) Release Notes Generator** — refactor from mix task
 
-```elixir
-defmodule Norns.Workflows.ReleaseNotes do
-  use Norns.Workflow
+```lua
+local since = state.since or "7 days ago"
+local commits = http("GET", ctx.repo_url .. "/commits?since=" .. since)
 
-  def execute(ctx) do
-    since = ctx.input["since"] || "7 days ago"
-    commits = shell(ctx, "git log --oneline --no-merges --since='#{since}'")
-
-    case commits do
-      "" -> {:ok, "No commits found."}
-      _  -> llm(ctx, "Summarize these commits into user-facing release notes grouped by category. Output markdown.\n\n#{commits}")
-    end
-  end
+if #commits == 0 then
+  emit("No commits found.")
+  return
 end
-```
 
-The mix task becomes a thin wrapper that creates the agent (with `workflow_module: "Norns.Workflows.ReleaseNotes"`) and enqueues the job.
+local notes = call_llm(
+  "Summarize these commits into user-facing release notes grouped by category. Output markdown.\n\n"
+  .. commits.body
+)
+
+emit(notes)
+```
 
 **b) URL Summarizer** — proves HTTP step works
 
-```elixir
-defmodule Norns.Workflows.UrlSummarizer do
-  use Norns.Workflow
-
-  def execute(ctx) do
-    url = ctx.input["url"]
-    body = http(ctx, :get, url).body
-
-    llm(ctx, "Summarize the following web page content concisely:\n\n#{body}")
-  end
-end
+```lua
+local body = http("GET", state.url)
+local summary = call_llm("Summarize the following web page content concisely:\n\n" .. body.body)
+emit(summary)
 ```
 
-Simple, but it exercises the HTTP primitive and shows a two-step workflow.
-
-### 5. POST Endpoint to Trigger Runs
+### 7. POST Endpoint to Trigger Runs
 
 `POST /api/v1/runs`
 
@@ -112,42 +151,52 @@ Returns:
 }
 ```
 
-Looks up the agent by name (scoped to tenant — tenant determined by API key in header for now), enqueues an Oban job. Minimal Phoenix controller, one route, JSON in/out.
-
-This also means wiring up the Phoenix endpoint, router, and a basic API auth plug (just checking an API key header against the tenant's keys).
+Also: `POST /api/v1/runs/:id/resume` for resuming interrupted workflows.
 
 ## Files to Create/Modify
 
 | File | Action |
 |------|--------|
-| `lib/norns/workflow.ex` | NEW — behaviour + step primitives |
-| `lib/norns/workflows/release_notes.ex` | NEW — release notes workflow |
-| `lib/norns/workflows/url_summarizer.ex` | NEW — URL summarizer workflow |
-| `lib/norns/agents/runner.ex` | MODIFY — dispatch to workflow module |
-| `lib/norns/agents/agent.ex` | MODIFY — add workflow_module field |
-| `priv/repo/migrations/NEW` | Migration: add workflow_module to agents |
-| `lib/mix/tasks/gen_release_notes.ex` | MODIFY — use workflow-based agent |
+| `lib/norns/workflow/runtime.ex` | NEW — Lua VM wrapper, execution, sandboxing |
+| `lib/norns/workflow/api.ex` | NEW — host functions exposed to Lua (`deflua`) |
+| `lib/norns/agents/runner.ex` | MODIFY — dispatch to Lua runtime |
+| `lib/norns/agents/agent.ex` | MODIFY — add workflow_script field |
+| `priv/repo/migrations/NEW` | Migration: add workflow_script to agents |
+| `lib/mix/tasks/gen_release_notes.ex` | MODIFY — use Lua workflow-based agent |
 | `lib/norns_web/endpoint.ex` | NEW — Phoenix endpoint |
 | `lib/norns_web/router.ex` | NEW — API routes |
-| `lib/norns_web/controllers/run_controller.ex` | NEW — POST /api/v1/runs |
+| `lib/norns_web/controllers/run_controller.ex` | NEW — POST /api/v1/runs, POST /runs/:id/resume |
 | `lib/norns_web/plugs/api_auth.ex` | NEW — API key auth |
 | `config/dev.exs` | MODIFY — add endpoint config |
-| `test/norns/workflow_test.exs` | NEW — workflow primitive tests |
-| `test/norns/workflows/release_notes_test.exs` | NEW |
+| `mix.exs` | MODIFY — add `lua` dependency |
+| `test/norns/workflow/runtime_test.exs` | NEW — Lua execution + sandboxing tests |
+| `test/norns/workflow/api_test.exs` | NEW — host function tests |
 | `test/norns_web/controllers/run_controller_test.exs` | NEW |
 
 ## What We're NOT Building
 
 - Chat builder (needs the engine first)
 - Integration connectors (use HTTP for everything)
-- Reflection/adjustment loop (future — needs more workflow examples first)
 - Workflow code generation (the chat builder's job, not the engine's)
-- Streaming responses
-- Async/parallel steps within a workflow
+- Streaming responses from within Lua scripts
+- Parallel step execution within a single workflow
+- Visual workflow editor or graph UI
+
+## Implementation Order
+
+1. Add `lua` dep, spike a hello-world Lua execution in a test
+2. Build `Workflow.Runtime` — execute Lua strings with sandboxing
+3. Build `Workflow.API` — expose `call_llm`, `http`, `emit` with RunEvent logging
+4. Wire into Runner — agent with `workflow_script` dispatches to Lua runtime
+5. Hand-write the two example workflows, validate end-to-end
+6. Add the POST endpoint for triggering runs
+7. Add `interrupt`/resume support
 
 ## Verification
 
-1. `docker compose run --rm app mix test` — all tests pass
-2. `docker compose run --rm app mix gen_release_notes --since "30 days ago"` — still works, now via workflow module
-3. `curl -X POST localhost:4000/api/v1/runs -H "x-api-key: ..." -d '{"agent": "release-notes-generator", "input": {"since": "7 days ago"}}'` — returns run_id, run completes
-4. Check DB: run has events for each workflow step (shell, llm) with inputs/outputs logged
+1. `docker compose run --rm -e MIX_ENV=test -e POSTGRES_HOST=db app mix test` — all tests pass
+2. Trigger release notes workflow via API — returns run_id, run completes
+3. Check DB: run has events for each Lua host function call with inputs/outputs logged
+4. Trigger URL summarizer — exercises HTTP + LLM steps
+5. Test sandboxing: a Lua script that tries `os.execute("rm -rf /")` fails safely
+6. Test resource limits: an infinite loop hits max_reductions and terminates

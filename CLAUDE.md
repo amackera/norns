@@ -10,6 +10,7 @@ Agent builder and hosting platform. Currently a working backend that can define 
 - **Database:** PostgreSQL (via Ecto)
 - **Background Jobs:** Oban
 - **LLM:** Anthropic Messages API via Req
+- **Workflow Runtime:** Lua scripts via luerl (`lua` hex package) — sandboxed execution on the BEAM
 - **Dev Environment:** Docker Compose (all mix commands run in containers)
 
 ## Running Commands
@@ -49,3 +50,4 @@ lib/mix/tasks/      — Mix tasks (gen_release_notes)
 - Oban workers wrap Runner for async/scheduled execution
 - Run events provide an append-only audit trail of each execution step
 - Agent lifecycle: inactive (off), idle (listening), running (doing work)
+- **Workflow direction:** Lua scripts executed via luerl, not Elixir modules or JSON graphs. See `docs/architecture.md` and `docs/decision-log.md` for rationale.
