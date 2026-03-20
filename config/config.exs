@@ -16,6 +16,10 @@ config :norns, Oban,
 config :norns,
   generators: [timestamp_type: :utc_datetime_usec]
 
+config :norns, Norns.Workflow.Runtime,
+  max_reductions: 50_000,
+  max_time: 100
+
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
