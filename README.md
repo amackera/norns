@@ -30,9 +30,15 @@ docker compose run --rm -e POSTGRES_HOST=db app mix ecto.migrate
 
 # Run the durability demo (no API key needed)
 docker compose run --rm -e POSTGRES_HOST=db app mix demo.durability
+
+# Run a real agent with a real LLM (requires ANTHROPIC_API_KEY)
+docker compose run --rm -e POSTGRES_HOST=db -e ANTHROPIC_API_KEY=sk-ant-... app \
+  mix demo.agent "What are the main features of Elixir 1.18?"
 ```
 
-The demo creates an agent, sends it a multi-step research query, kills the process mid-task, then resumes from the event log and completes:
+`demo.durability` uses a fake LLM to show crash recovery. `demo.agent` uses a real LLM with real tool calls — you can watch it fetch web pages and synthesize an answer.
+
+The durability demo creates an agent, sends it a multi-step research query, kills the process mid-task, then resumes from the event log and completes:
 
 ```
 >> Starting agent and sending query...
