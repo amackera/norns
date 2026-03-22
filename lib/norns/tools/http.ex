@@ -3,13 +3,15 @@ defmodule Norns.Tools.Http do
 
   use Norns.Tools.Behaviour
 
-  @max_body_length 10_000
+  @max_body_length 4_000
 
   @impl true
   def name, do: "http_request"
 
   @impl true
-  def description, do: "Make an HTTP request. Supports GET and POST methods."
+  def description do
+    "Make an HTTP request. Supports GET and POST methods. HTML responses are stripped to text content."
+  end
 
   @impl true
   def input_schema do
@@ -48,8 +50,9 @@ defmodule Norns.Tools.Http do
     case result do
       {:ok, %Req.Response{status: status, body: body}} ->
         body_str = if is_binary(body), do: body, else: Jason.encode!(body)
-        truncated = String.slice(body_str, 0, @max_body_length)
-        suffix = if String.length(body_str) > @max_body_length, do: "\n...(truncated)", else: ""
+        cleaned = clean_body(body_str)
+        truncated = String.slice(cleaned, 0, @max_body_length)
+        suffix = if String.length(cleaned) > @max_body_length, do: "\n...(truncated)", else: ""
         {:ok, "HTTP #{status}\n\n#{truncated}#{suffix}"}
 
       {:error, reason} ->
@@ -58,6 +61,27 @@ defmodule Norns.Tools.Http do
   end
 
   def execute(_), do: {:error, "Missing required parameter: url"}
+
+  defp clean_body(body) do
+    if String.contains?(body, "<html") or String.contains?(body, "<!DOCTYPE") do
+      strip_html(body)
+    else
+      body
+    end
+  end
+
+  defp strip_html(html) do
+    html
+    |> String.replace(~r/<script[^>]*>.*?<\/script>/s, "")
+    |> String.replace(~r/<style[^>]*>.*?<\/style>/s, "")
+    |> String.replace(~r/<nav[^>]*>.*?<\/nav>/s, "")
+    |> String.replace(~r/<header[^>]*>.*?<\/header>/s, "")
+    |> String.replace(~r/<footer[^>]*>.*?<\/footer>/s, "")
+    |> String.replace(~r/<[^>]+>/, " ")
+    |> String.replace(~r/&[a-zA-Z]+;/, " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
 
   defp parse_headers(nil), do: []
   defp parse_headers(headers) when is_map(headers) do

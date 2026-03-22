@@ -68,7 +68,8 @@ defmodule Mix.Tasks.Demo.Agent do
       name: "researcher-#{System.unique_integer([:positive])}",
       system_prompt: @system_prompt,
       status: "idle",
-      model: "claude-sonnet-4-20250514"
+      model: "claude-sonnet-4-20250514",
+      model_config: %{"on_failure" => "retry_last_step"}
     })
 
     tools = [Http.__tool__(), WebSearch.__tool__(), Shell.__tool__()]
