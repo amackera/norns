@@ -68,7 +68,7 @@ defmodule Mix.Tasks.Demo.Agent do
       name: "researcher-#{System.unique_integer([:positive])}",
       system_prompt: @system_prompt,
       status: "idle",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-haiku-4-5-20251001",
       model_config: %{"on_failure" => "retry_last_step"}
     })
 

@@ -3,7 +3,7 @@ defmodule Norns.Tools.Http do
 
   use Norns.Tools.Behaviour
 
-  @max_body_length 4_000
+  @max_body_length 1_500
 
   @impl true
   def name, do: "http_request"
