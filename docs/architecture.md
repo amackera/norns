@@ -18,7 +18,20 @@ Every competitor (Temporal, Restate, Inngest, Cloudflare, Vercel) is built on Go
 
 ## Core Primitive
 
-Each agent is a GenServer managed by a DynamicSupervisor. The agent process runs the core loop:
+Each agent is a GenServer managed by a DynamicSupervisor, configured by an `AgentDef` struct:
+
+```elixir
+%AgentDef{
+  model: "claude-sonnet-4-20250514",
+  system_prompt: "You are a research assistant...",
+  tools: [MyTools.WebSearch, MyTools.WriteDoc],
+  checkpoint_policy: :on_tool_call,
+  max_steps: 50,
+  on_failure: :retry_last_step
+}
+```
+
+The agent process runs the core loop:
 
 ```
 receive message → call LLM → if tool call, execute tool → checkpoint → repeat
@@ -34,14 +47,14 @@ Norns never calls out to user code via HTTP. Instead, workers pull tasks — lik
 Norns Runtime (BEAM)                     User's Infrastructure
   │                                         │
   Agent GenServer                           Norns Worker
-  │  runs LLM loop                          │  connects to runtime
+  │  runs LLM loop                          │  connects via WebSocket /worker
   │  checkpoints state                      │  registers available tools
   │  hits tool call                         │  waits for tasks
   │    ↓                                    │
-  │  puts task on queue ─── persistent ───► │  receives tool task
+  │  puts task on queue ─── persistent ───► │  receives tool_task push
   │                         connection      │  executes locally
   │                                         │  (full access to user's DBs,
-  │  ◄── result ──────────────────────────  │   APIs, secrets)
+  │  ◄── tool_result ─────────────────────  │   APIs, secrets)
   │                                         │
   │  checkpoint result                      │
   │  continue LLM loop                     │
@@ -50,29 +63,82 @@ Norns Runtime (BEAM)                     User's Infrastructure
 Key properties:
 - **Workers make outbound connections only** — works behind firewalls/NATs, no public endpoints needed
 - **Norns never touches user data** — it orchestrates; workers execute
-- **If a worker disconnects**, norns holds pending tasks and resumes when it reconnects
+- **If a worker disconnects**, TaskQueue holds pending tasks and resumes when it reconnects
 - **Self-hosted mode**: worker and runtime share the same BEAM VM, tool calls are local function calls with no network hop
 
-BEAM advantage over Temporal: instead of workers long-polling a queue, norns uses persistent connections and pushes tasks instantly.
+### Worker Protocol
 
-## Tool Layers
+Workers connect to `/worker` WebSocket, authenticated via tenant API key.
 
-From the agent's perspective, all tools look identical: name, description, schema, execute. Norns wraps them uniformly with durability (checkpoint before calling, persist result, skip on replay).
+| Direction | Event | Payload |
+|-----------|-------|---------|
+| Worker → Server | join `"worker:lobby"` | `{worker_id, tools: [{name, description, input_schema}]}` |
+| Server → Worker | push `"tool_task"` | `{task_id, tool_name, input, agent_id, run_id}` |
+| Worker → Server | `"tool_result"` | `{task_id, status: "ok"/"error", result/error}` |
 
-Three sources of tools:
+`WorkerRegistry` (GenServer) tracks connected workers, dispatches tasks, routes results. `TaskQueue` (GenServer) holds tasks when no worker is available, flushes on reconnect, sweeps stale tasks with timeout.
 
-1. **Built-in tools** — ship with norns (web search, HTTP, file I/O). These are just user-defined tools that happen to be bundled.
-2. **User-defined tools** — functions registered via the SDK. Run in the user's worker process.
+## Tool System
+
+From the agent's perspective, all tools look identical. The `Executor` transparently handles both local and remote tools.
+
+### Tool Definition
+
+Tools are modules implementing `Norns.Tools.Behaviour`:
+
+```elixir
+defmodule MyTools.LookupCustomer do
+  use Norns.Tools.Behaviour
+
+  def name, do: "lookup_customer"
+  def description, do: "Look up a customer by email"
+  def input_schema, do: %{"type" => "object", "properties" => %{"email" => %{"type" => "string"}}}
+
+  def execute(%{"email" => email}) do
+    {:ok, "Customer: #{email}"}
+  end
+end
+```
+
+### Three Sources of Tools
+
+1. **Built-in tools** — ship with norns, registered in `Tools.Registry` (ETS) on boot. Currently: WebSearch (stub).
+2. **User-defined tools** — registered via workers over WebSocket. Tracked in `WorkerRegistry`. Represented as `%Tool{source: {:remote, tenant_id}}`.
 3. **MCP tools** (future) — norns connects to external MCP servers as a client, discovers tools automatically.
+
+### Execution Path
+
+`Tools.Executor.execute/2` checks the tool's `source` field:
+- `:local` → calls the handler function directly
+- `{:remote, tenant_id}` → dispatches via `WorkerRegistry`, blocks on `await_result/2`
 
 ## API Surface
 
-Phoenix serves two channels:
+### REST API (`/api/v1`)
 
-- **REST API** — lifecycle management: create agent, send message, get status, list runs
-- **WebSocket (Phoenix Channels)** — streaming: agent output tokens, tool call progress, state changes in real time
+Authenticated via `Authorization: Bearer <token>` matched against tenant `api_keys`.
 
-Phoenix PubSub connects agent processes to transport. Agent processes publish events, channels subscribe. Decoupled from transport and scales to multi-node via distributed Erlang or Redis-backed PubSub.
+```
+POST   /api/v1/agents              — create agent
+GET    /api/v1/agents              — list agents
+GET    /api/v1/agents/:id          — show agent
+POST   /api/v1/agents/:id/start   — spawn GenServer
+DELETE /api/v1/agents/:id/stop    — stop GenServer
+GET    /api/v1/agents/:id/status  — process state
+POST   /api/v1/agents/:id/messages — send message (202)
+GET    /api/v1/agents/:id/runs    — run history
+GET    /api/v1/runs/:id           — run details
+GET    /api/v1/runs/:id/events    — event log
+```
+
+### WebSocket Channels
+
+Two socket endpoints:
+
+- **`/socket`** (AgentSocket) — clients join `"agent:<id>"` to receive real-time agent events (llm_response, tool_call, tool_result, completed, error). Can also send messages via channel.
+- **`/worker`** (WorkerSocket) — workers join `"worker:lobby"` with tool registrations, receive `tool_task` pushes, send `tool_result` replies.
+
+PubSub connects agent processes to channels. Agent processes publish events, channels subscribe and forward.
 
 ## Data Model
 
@@ -80,62 +146,64 @@ Event-sourced persistence in Postgres via Ecto.
 
 Core tables:
 - `tenants` — name, slug, api_keys (multi-tenancy enforced at schema level)
-- `agents` — agent definitions (model, system prompt, tool config, checkpoint policy)
-- `runs` — individual execution instances (status, input, output, trigger)
-- `run_events` — append-only event log per run (message received, LLM response, tool call, tool result, checkpoint, error)
+- `agents` — name, purpose, system_prompt, model, model_config, tools_config, max_steps, status
+- `runs` — status, trigger_type, input, output, agent_id, tenant_id
+- `run_events` — sequence, event_type, payload, source, metadata, run_id, tenant_id
+
+Event types: `agent_started`, `llm_request`, `llm_response`, `tool_call`, `tool_result`, `checkpoint`, `retry`, `agent_completed`, `agent_error`
 
 On restart: find last checkpoint event, replay events since that checkpoint.
 
-## Current State (Phase 1 Complete)
+## Agent Configuration
 
-```
-Supervisor
-├── Norns.Repo (Ecto/PostgreSQL)
-├── Oban (background job processor)
-├── Phoenix.PubSub (event broadcasting)
-├── Registry (agent process lookup)
-└── DynamicSupervisor (agent GenServers)
-    └── Agents.Process — LLM-tool loop with event persistence
-```
+`AgentDef` struct configures agent behavior:
 
-What works today:
-- Agent GenServer with full LLM-tool loop
-- Event-sourced persistence with periodic checkpoints
-- Crash recovery via state reconstruction from event log
-- Orphan recovery on boot (resumes interrupted runs)
-- DynamicSupervisor + Registry for agent lifecycle
-- Swappable LLM backend (Anthropic impl + test fake)
-- Tool execution framework (struct-based, local handlers)
-- PubSub broadcasting of agent events
-- 35 tests passing
+- **`checkpoint_policy`**: `:every_step` (after every LLM call), `:on_tool_call` (after tool execution, default), `:manual` (no automatic checkpoints)
+- **`on_failure`**: `:stop` (default, mark run as failed) or `:retry_last_step` (exponential backoff, max 3 retries)
+- **`max_steps`**: safety limit on LLM-tool loop iterations (default 50)
+
+`AgentDef.from_agent/2` builds from an Agent schema record. Checkpoint and failure policies read from `model_config` map.
 
 ## Crash Recovery
 
 State reconstruction from the event log:
-1. Find the last `checkpoint` event (periodic full message snapshot)
-2. Replay events after the checkpoint to rebuild the message history
+1. Find the last `checkpoint` event (full message snapshot)
+2. Replay events after the checkpoint to rebuild message history
 3. Resume the LLM-tool loop from where it left off
 
-Resume logic based on last event type:
-- `llm_response` with tool_use → re-execute tool calls
-- `tool_result` → call LLM with updated history
-- `checkpoint` → clean state, call LLM
-
 On boot, `Workers.ResumeAgents` finds runs with status "running" and no live process, and resumes them.
+
+## Supervision Tree
+
+```
+Norns.Supervisor (one_for_one)
+├── Norns.Repo (Ecto/PostgreSQL)
+├── Oban (background jobs)
+├── Phoenix.PubSub (Norns.PubSub)
+├── Registry (Norns.AgentRegistry, unique keys)
+├── DynamicSupervisor (Norns.AgentSupervisor)
+│   └── [Agents.Process] (spawned dynamically per agent)
+├── Workers.WorkerRegistry (tracks connected workers)
+├── Workers.TaskQueue (pending tasks for disconnected workers)
+├── NornsWeb.Telemetry
+└── NornsWeb.Endpoint (Phoenix — REST + WebSocket)
+```
+
+On boot: init tool registry, register built-in tools, resume orphaned runs.
 
 ## Build Phases
 
 ### Phase 1: Core Primitive ✓
-Durable agent process end-to-end. GenServer with LLM-tool loop, event-sourced persistence, crash recovery, orphan recovery on boot.
+Durable agent GenServer, event-sourced persistence, crash recovery, orphan recovery.
 
-### Phase 2: API + Transport
-Phoenix REST API for lifecycle management. Phoenix Channels (WebSocket) for streaming. PubSub connecting agent processes to channels.
+### Phase 2: API + Transport ✓
+Phoenix REST API for lifecycle management. WebSocket channels for real-time streaming. Bearer token auth.
 
-### Phase 3: Generic Agent Definitions
-Replace ad-hoc agent config with declarative `AgentDef` struct. Module-based tool definitions (`use Norns.Tool`). Tool registry. Configurable checkpoint policies and failure recovery.
+### Phase 3: Generic Agent Definitions ✓
+`AgentDef` struct with configurable checkpoint policies and failure recovery. Module-based tool definitions via `use Norns.Tools.Behaviour`. ETS-backed tool registry.
 
-### Phase 4: Worker Protocol
-Worker connection management (persistent WebSocket/TCP). Tool registration protocol. Task dispatch and result collection. Reconnection handling.
+### Phase 4: Worker Protocol ✓
+Worker WebSocket at `/worker`. Tool registration on join. Task dispatch and result collection via `WorkerRegistry`. `TaskQueue` for pending tasks. Reconnection handling.
 
 ### Phase 5: TypeScript/Python SDKs
 Developers define agents and tools in their language, SDK talks to Norns runtime over the API. BEAM is the engine, not the interface.
