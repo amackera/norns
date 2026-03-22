@@ -11,6 +11,13 @@ defmodule Norns.Runs do
   def get_run(id), do: Repo.get(Run, id)
   def get_run!(id), do: Repo.get!(Run, id)
 
+  def list_runs(agent_id) do
+    Run
+    |> where([r], r.agent_id == ^agent_id)
+    |> order_by([r], desc: r.inserted_at)
+    |> Repo.all()
+  end
+
   def create_run(attrs) do
     %Run{}
     |> Run.changeset(attrs)

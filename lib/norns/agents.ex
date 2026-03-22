@@ -8,6 +8,13 @@ defmodule Norns.Agents do
 
   def get_agent!(id), do: Repo.get!(Agent, id)
 
+  def list_agents(tenant_id) do
+    Agent
+    |> where([a], a.tenant_id == ^tenant_id)
+    |> order_by([a], desc: a.inserted_at)
+    |> Repo.all()
+  end
+
   def get_agent_by_name(tenant_id, name) do
     Agent
     |> where([a], a.tenant_id == ^tenant_id and a.name == ^name)

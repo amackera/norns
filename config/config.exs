@@ -19,6 +19,14 @@ config :norns,
 
 config :norns, Norns.LLM, module: Norns.LLM.Anthropic
 
+config :norns, NornsWeb.Endpoint,
+  url: [host: "localhost"],
+  adapter: Bandit.PhoenixAdapter,
+  render_errors: [formats: [json: NornsWeb.ErrorJSON], layout: false],
+  pubsub_server: Norns.PubSub
+
+config :phoenix, :json_library, Jason
+
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]

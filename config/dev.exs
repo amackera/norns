@@ -15,6 +15,11 @@ config :norns, Oban,
   plugins: [Oban.Plugins.Pruner],
   queues: [default: 10]
 
+config :norns, NornsWeb.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4000],
+  check_origin: false,
+  secret_key_base: "dev-only-secret-key-base-that-is-at-least-64-bytes-long-for-phoenix"
+
 # Disable live-reload file watcher — no web UI yet, and containers lack inotify-tools.
 config :phoenix_live_view, enable_expensive_runtime_checks: false
 

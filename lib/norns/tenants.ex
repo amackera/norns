@@ -8,6 +8,16 @@ defmodule Norns.Tenants do
 
   def get_tenant_by_slug(slug), do: Repo.get_by(Tenant, slug: slug)
 
+  def list_tenants, do: Repo.all(Tenant)
+
+  @doc "Find the tenant whose api_keys map contains the given token as a value."
+  def get_tenant_by_api_key(token) when is_binary(token) do
+    case Enum.find(list_tenants(), fn t -> token in Map.values(t.api_keys) end) do
+      %Tenant{} = t -> {:ok, t}
+      nil -> :error
+    end
+  end
+
   def create_tenant(attrs) do
     %Tenant{}
     |> Tenant.changeset(attrs)

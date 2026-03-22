@@ -17,4 +17,9 @@ config :norns, Oban,
 
 config :norns, Norns.LLM, module: Norns.LLM.Fake
 
+config :norns, NornsWeb.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4002],
+  secret_key_base: "test-only-secret-key-base-that-is-at-least-64-bytes-long-for-phoenix",
+  server: false
+
 config :logger, level: :warning
