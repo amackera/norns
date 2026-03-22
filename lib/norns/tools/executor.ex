@@ -2,14 +2,17 @@ defmodule Norns.Tools.Executor do
   @moduledoc "Matches tool_use blocks to registered tools and executes them."
 
   alias Norns.Tools.Tool
+  alias Norns.Workers.WorkerRegistry
 
   @doc """
   Execute a tool call. Finds the matching tool by name and calls its handler.
-
-  Returns `{:ok, result_string}` or `{:error, error_string}`.
+  Supports both local and remote (worker-provided) tools.
   """
   def execute(%{"name" => name, "input" => input}, tools) when is_list(tools) do
     case Enum.find(tools, &(&1.name == name)) do
+      %Tool{source: {:remote, tenant_id}} ->
+        execute_remote(tenant_id, name, input)
+
       %Tool{handler: handler} ->
         try do
           handler.(input)
@@ -43,5 +46,15 @@ defmodule Norns.Tools.Executor do
         result
       end
     end)
+  end
+
+  defp execute_remote(tenant_id, tool_name, input) do
+    case WorkerRegistry.dispatch_task(tenant_id, tool_name, input, from_pid: self()) do
+      {:ok, task_id} ->
+        WorkerRegistry.await_result(task_id)
+
+      {:error, :no_worker} ->
+        {:error, "No worker available for tool: #{tool_name}"}
+    end
   end
 end

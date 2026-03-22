@@ -1,5 +1,5 @@
 defmodule Norns.Agents.RunnerTest do
-  use Norns.DataCase, async: true
+  use Norns.DataCase, async: false
 
   alias Norns.Agents.Runner
   alias Norns.LLM.Fake

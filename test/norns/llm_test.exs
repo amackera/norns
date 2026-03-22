@@ -1,5 +1,5 @@
 defmodule Norns.LLMTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Norns.LLM
   alias Norns.LLM.Fake

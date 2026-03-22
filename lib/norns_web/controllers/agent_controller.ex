@@ -51,8 +51,8 @@ defmodule NornsWeb.AgentController do
   def stop(conn, %{"agent_id" => agent_id}) do
     tenant = conn.assigns.current_tenant
 
-    with {:ok, _agent} <- fetch_agent(agent_id, tenant.id) do
-      case Registry.stop_agent(tenant.id, String.to_integer(agent_id)) do
+    with {:ok, agent} <- fetch_agent(agent_id, tenant.id) do
+      case Registry.stop_agent(tenant.id, agent.id) do
         :ok -> json(conn, %{status: "stopped"})
         {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "agent not running"})
       end

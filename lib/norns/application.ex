@@ -11,6 +11,8 @@ defmodule Norns.Application do
       {Phoenix.PubSub, name: Norns.PubSub},
       {Registry, keys: :unique, name: Norns.AgentRegistry},
       {DynamicSupervisor, name: Norns.AgentSupervisor, strategy: :one_for_one},
+      Norns.Workers.WorkerRegistry,
+      Norns.Workers.TaskQueue,
       NornsWeb.Telemetry,
       NornsWeb.Endpoint
     ]
@@ -20,6 +22,8 @@ defmodule Norns.Application do
 
     case result do
       {:ok, _pid} ->
+        Norns.Tools.Registry.init()
+        Norns.Tools.Registry.register(Norns.Tools.WebSearch)
         Norns.Workers.ResumeAgents.resume_orphans()
         result
 

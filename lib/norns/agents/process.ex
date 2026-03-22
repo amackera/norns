@@ -9,10 +9,10 @@ defmodule Norns.Agents.Process do
   require Logger
 
   alias Norns.{Agents, LLM, Runs, Tenants}
+  alias Norns.Agents.AgentDef
   alias Norns.Tools.{Executor, Tool}
 
-  @default_max_steps 50
-  @checkpoint_interval 5
+  @max_retries 3
 
   # -- Public API --
 
@@ -37,25 +37,33 @@ defmodule Norns.Agents.Process do
   def init(opts) do
     agent_id = Keyword.fetch!(opts, :agent_id)
     tenant_id = Keyword.fetch!(opts, :tenant_id)
-    tools = Keyword.get(opts, :tools, [])
-    max_steps = Keyword.get(opts, :max_steps, @default_max_steps)
     resume_run_id = Keyword.get(opts, :resume_run_id)
 
     agent = Agents.get_agent!(agent_id)
     tenant = Tenants.get_tenant!(tenant_id)
     api_key = tenant.api_keys["anthropic"] || ""
 
+    # Build AgentDef from opts or from agent record
+    agent_def =
+      Keyword.get_lazy(opts, :agent_def, fn ->
+        tools = Keyword.get(opts, :tools, [])
+        max_steps = Keyword.get(opts, :max_steps)
+
+        def_opts = [tools: tools]
+        base_def = AgentDef.from_agent(agent, def_opts)
+
+        if max_steps, do: %{base_def | max_steps: max_steps}, else: base_def
+      end)
+
     state = %{
       agent_id: agent_id,
       tenant_id: tenant_id,
       agent: agent,
       api_key: api_key,
-      model: agent.model,
-      system_prompt: agent.system_prompt,
-      tools: tools,
+      agent_def: agent_def,
       messages: [],
       step: 0,
-      max_steps: max_steps,
+      retry_count: 0,
       run: nil,
       status: :idle
     }
@@ -69,7 +77,6 @@ defmodule Norns.Agents.Process do
 
   @impl true
   def handle_cast({:send_message, content}, %{status: :idle} = state) do
-    # Create a new run
     {:ok, run} =
       Runs.create_run(%{
         agent_id: state.agent_id,
@@ -83,7 +90,7 @@ defmodule Norns.Agents.Process do
     {:ok, run} = Runs.update_run(run, %{status: "running"})
 
     messages = state.messages ++ [%{role: "user", content: content}]
-    state = %{state | run: run, messages: messages, step: 0, status: :running}
+    state = %{state | run: run, messages: messages, step: 0, retry_count: 0, status: :running}
 
     broadcast(state, :agent_started, %{run_id: run.id})
     {:noreply, state, {:continue, :llm_loop}}
@@ -109,28 +116,29 @@ defmodule Norns.Agents.Process do
 
   @impl true
   def handle_continue(:llm_loop, state) do
-    if state.step >= state.max_steps do
-      {:noreply, complete_with_error(state, "Max steps (#{state.max_steps}) exceeded")}
+    max_steps = state.agent_def.max_steps
+
+    if state.step >= max_steps do
+      {:noreply, complete_with_error(state, "Max steps (#{max_steps}) exceeded")}
     else
       state = %{state | step: state.step + 1}
 
-      # Log LLM request event BEFORE making the call
       Runs.append_event(state.run, %{
         event_type: "llm_request",
         source: "system",
         payload: %{"step" => state.step, "message_count" => length(state.messages)}
       })
 
-      api_tools = Enum.map(state.tools, &Tool.to_api_format/1)
+      api_tools = Enum.map(state.agent_def.tools, &Tool.to_api_format/1)
       opts = if api_tools == [], do: [], else: [tools: api_tools]
 
-      case LLM.chat(state.api_key, state.model, state.system_prompt, state.messages, opts) do
+      case LLM.chat(state.api_key, state.agent_def.model, state.agent_def.system_prompt, state.messages, opts) do
         {:ok, response} ->
+          state = %{state | retry_count: 0}
           handle_llm_response(state, response)
 
         {:error, reason} ->
-          Logger.error("LLM call failed: #{inspect(reason)}")
-          {:noreply, complete_with_error(state, "LLM error: #{inspect(reason)}")}
+          handle_llm_error(state, reason)
       end
     end
   end
@@ -148,7 +156,6 @@ defmodule Norns.Agents.Process do
   end
 
   def handle_continue({:execute_tools, tool_use_blocks}, state) do
-    # Log each tool call
     Enum.each(tool_use_blocks, fn block ->
       Runs.append_event(state.run, %{
         event_type: "tool_call",
@@ -164,10 +171,8 @@ defmodule Norns.Agents.Process do
       broadcast(state, :tool_call, %{name: block["name"], input: block["input"]})
     end)
 
-    # Execute all tools
-    tool_results = Executor.execute_all(tool_use_blocks, state.tools)
+    tool_results = Executor.execute_all(tool_use_blocks, state.agent_def.tools)
 
-    # Log each tool result
     Enum.each(tool_results, fn result ->
       Runs.append_event(state.run, %{
         event_type: "tool_result",
@@ -186,20 +191,22 @@ defmodule Norns.Agents.Process do
       })
     end)
 
-    # Append tool results as a user message and continue the loop
     messages = state.messages ++ [%{role: "user", content: tool_results}]
     state = %{state | messages: messages}
 
-    # Periodic checkpoint
-    state = maybe_checkpoint(state)
+    state = maybe_checkpoint(state, :tool_result)
 
+    {:noreply, state, {:continue, :llm_loop}}
+  end
+
+  @impl true
+  def handle_info(:retry_llm, state) do
     {:noreply, state, {:continue, :llm_loop}}
   end
 
   # -- Internal --
 
   defp handle_llm_response(state, response) do
-    # Log LLM response event
     Runs.append_event(state.run, %{
       event_type: "llm_response",
       source: "system",
@@ -214,9 +221,10 @@ defmodule Norns.Agents.Process do
       }
     })
 
-    # Append assistant message to history
     messages = state.messages ++ [%{role: "assistant", content: response.content}]
     state = %{state | messages: messages}
+
+    state = maybe_checkpoint(state, :llm_response)
 
     broadcast(state, :llm_response, %{
       step: state.step,
@@ -235,9 +243,38 @@ defmodule Norns.Agents.Process do
         {:noreply, state, {:continue, {:execute_tools, tool_use_blocks}}}
 
       other ->
-        # Treat unknown stop reasons as completion
         Logger.info("Unknown stop_reason #{inspect(other)}, treating as end_turn")
         {:noreply, complete_successfully(state, response.content)}
+    end
+  end
+
+  defp handle_llm_error(state, reason) do
+    case state.agent_def.on_failure do
+      :retry_last_step when state.retry_count < @max_retries ->
+        retry_count = state.retry_count + 1
+        delay = 1000 * Integer.pow(2, retry_count - 1)
+
+        Logger.warning("LLM call failed (attempt #{retry_count}/#{@max_retries}), retrying in #{delay}ms: #{inspect(reason)}")
+
+        Runs.append_event(state.run, %{
+          event_type: "retry",
+          source: "system",
+          payload: %{
+            "error" => inspect(reason),
+            "attempt" => retry_count,
+            "delay_ms" => delay,
+            "step" => state.step
+          }
+        })
+
+        # Undo the step increment so the retry re-executes the same step
+        state = %{state | step: state.step - 1, retry_count: retry_count}
+        Process.send_after(self(), :retry_llm, delay)
+        {:noreply, state}
+
+      _ ->
+        Logger.error("LLM call failed: #{inspect(reason)}")
+        {:noreply, complete_with_error(state, "LLM error: #{inspect(reason)}")}
     end
   end
 
@@ -274,20 +311,28 @@ defmodule Norns.Agents.Process do
     %{state | run: run, status: :idle}
   end
 
-  defp maybe_checkpoint(%{step: step} = state) when rem(step, @checkpoint_interval) == 0 do
-    Runs.append_event(state.run, %{
-      event_type: "checkpoint",
-      source: "system",
-      payload: %{
-        "messages" => state.messages,
-        "step" => state.step
-      }
-    })
+  # Checkpoint policies
+  defp maybe_checkpoint(state, context) do
+    should_checkpoint =
+      case state.agent_def.checkpoint_policy do
+        :every_step -> true
+        :on_tool_call -> context == :tool_result
+        :manual -> false
+      end
+
+    if should_checkpoint do
+      Runs.append_event(state.run, %{
+        event_type: "checkpoint",
+        source: "system",
+        payload: %{
+          "messages" => state.messages,
+          "step" => state.step
+        }
+      })
+    end
 
     state
   end
-
-  defp maybe_checkpoint(state), do: state
 
   defp broadcast(state, event, payload) do
     Phoenix.PubSub.broadcast(
@@ -307,7 +352,6 @@ defmodule Norns.Agents.Process do
     if events == [] do
       {:error, :no_events}
     else
-      # Find the last checkpoint to minimize replay
       {messages, step} = replay_from_events(events)
 
       {:ok,
@@ -322,7 +366,6 @@ defmodule Norns.Agents.Process do
   end
 
   defp replay_from_events(events) do
-    # Find last checkpoint
     checkpoint =
       events
       |> Enum.reverse()
@@ -330,14 +373,12 @@ defmodule Norns.Agents.Process do
 
     case checkpoint do
       %{payload: %{"messages" => messages, "step" => step}} ->
-        # Replay events after the checkpoint
         post_checkpoint =
           Enum.drop_while(events, fn e -> e.sequence <= checkpoint.sequence end)
 
         replay_events_onto(messages, step, post_checkpoint)
 
       nil ->
-        # No checkpoint — replay from scratch
         replay_events_onto([], 0, events)
     end
   end
@@ -350,8 +391,6 @@ defmodule Norns.Agents.Process do
           {msgs ++ [%{role: "assistant", content: content}], event.payload["step"] || s}
 
         "tool_result" ->
-          # Accumulate tool results — they'll be grouped into a user message
-          # Check if last message is already a user tool_result list
           tool_result = %{
             "type" => "tool_result",
             "tool_use_id" => event.payload["tool_use_id"],
@@ -372,17 +411,7 @@ defmodule Norns.Agents.Process do
               {msgs ++ [%{role: "user", content: [tool_result]}], s}
           end
 
-        "agent_started" ->
-          {msgs, s}
-
-        "llm_request" ->
-          {msgs, s}
-
-        "tool_call" ->
-          {msgs, s}
-
         "checkpoint" ->
-          # If we encounter a checkpoint during post-checkpoint replay, use it
           {event.payload["messages"], event.payload["step"]}
 
         _ ->
