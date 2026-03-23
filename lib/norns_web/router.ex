@@ -1,9 +1,28 @@
 defmodule NornsWeb.Router do
   use NornsWeb, :router
 
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {NornsWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+    plug NornsWeb.Plugs.SessionAuth
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
     plug NornsWeb.Plugs.Auth
+  end
+
+  scope "/", NornsWeb do
+    pipe_through :browser
+
+    live "/", AgentsLive
+    live "/agents/:id", AgentLive
+    live "/runs/:id", RunLive
+    live "/tools", ToolsLive
   end
 
   scope "/api/v1", NornsWeb do

@@ -23,7 +23,8 @@ config :norns, NornsWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [formats: [json: NornsWeb.ErrorJSON], layout: false],
-  pubsub_server: Norns.PubSub
+  pubsub_server: Norns.PubSub,
+  live_view: [signing_salt: "norns_lv_salt"]
 
 config :phoenix, :json_library, Jason
 
