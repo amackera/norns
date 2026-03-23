@@ -24,13 +24,14 @@
   </head>
   <body class="bg-gray-950 text-gray-200 min-h-screen">
     <%= @inner_content %>
-    <script src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js">
+    <script src="/assets/phoenix.min.js">
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.0.4/priv/static/phoenix_live_view.min.js">
+    <script src="/assets/phoenix_live_view.min.js">
     </script>
     <script>
       let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
-      let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
+      let liveSocket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
+        longPollFallbackMs: 2500,
         params: { _csrf_token: csrfToken }
       });
       liveSocket.connect();

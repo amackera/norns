@@ -7,5 +7,7 @@
 /deps/
 /cover/
 
-# Generated static assets
-/priv/static/assets/
+# Generated static assets (keep phoenix JS)
+/priv/static/assets/*
+!/priv/static/assets/phoenix.min.js
+!/priv/static/assets/phoenix_live_view.min.js
