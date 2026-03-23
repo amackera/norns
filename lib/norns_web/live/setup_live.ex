@@ -127,12 +127,17 @@ defmodule NornsWeb.SetupLive do
   # Simple slug generation — no external dep needed
   defmodule Slug do
     def slugify(str) do
-      str
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9\s-]/, "")
-      |> String.replace(~r/\s+/, "-")
-      |> String.trim("-")
-      |> then(fn s -> if s == "", do: "tenant-#{System.unique_integer([:positive])}", else: s end)
+      base =
+        str
+        |> String.downcase()
+        |> String.replace(~r/[^a-z0-9\s-]/, "")
+        |> String.replace(~r/\s+/, "-")
+        |> String.trim("-")
+
+      base = if base == "", do: "tenant", else: base
+
+      # Append unique suffix to avoid conflicts
+      "#{base}-#{System.unique_integer([:positive])}"
     end
   end
 end
