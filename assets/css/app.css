@@ -1,0 +1,20 @@
+@import "tailwindcss";
+@source "../../lib/norns_web";
+
+@theme {
+  --font-mono: ui-monospace, 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+body {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}

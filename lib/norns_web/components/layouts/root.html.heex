@@ -5,22 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
     <title>Norns</title>
-    <script src="https://cdn.tailwindcss.com">
-    </script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] }
-          }
-        }
-      }
-    </script>
-    <style>
-      body { font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; }
-      @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-      .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
-    </style>
+    <link rel="stylesheet" href="/assets/app.css" />
   </head>
   <body class="bg-gray-950 text-gray-200 min-h-screen">
     <%= @inner_content %>

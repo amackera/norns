@@ -26,6 +26,16 @@ config :norns, NornsWeb.Endpoint,
   pubsub_server: Norns.PubSub,
   live_view: [signing_salt: "norns_lv_salt"]
 
+config :tailwind,
+  version: "4.1.12",
+  norns: [
+    args: ~w(
+      --input=assets/css/app.css
+      --output=priv/static/assets/app.css
+    ),
+    cd: Path.expand("..", __DIR__)
+  ]
+
 config :phoenix, :json_library, Jason
 
 config :logger, :console,
