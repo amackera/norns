@@ -1,9 +1,9 @@
 defmodule Norns.Agents.ProcessTest do
   use Norns.DataCase, async: false
 
+  alias Norns.{Conversations, Runs}
   alias Norns.Agents.Process, as: AgentProcess
   alias Norns.LLM.Fake
-  alias Norns.Runs
   alias Norns.Tools.WebSearch
 
   setup do
@@ -46,6 +46,24 @@ defmodule Norns.Agents.ProcessTest do
       assert "llm_request" in event_types
       assert "llm_response" in event_types
       assert "agent_completed" in event_types
+    end
+
+    test "task mode starts fresh on each run", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([
+        %{content: [%{"type" => "text", "text" => "first"}], stop_reason: "end_turn"},
+        %{content: [%{"type" => "text", "text" => "second"}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+
+      AgentProcess.send_message(pid, "first message")
+      Process.sleep(100)
+      AgentProcess.send_message(pid, "second message")
+      Process.sleep(100)
+
+      [first_call, second_call] = Fake.calls()
+      assert first_call.messages == [%{role: "user", content: "first message"}]
+      assert second_call.messages == [%{role: "user", content: "second message"}]
     end
   end
 
@@ -160,6 +178,51 @@ defmodule Norns.Agents.ProcessTest do
       assert_received {:agent_started, %{agent_id: _}}
       assert_received {:llm_response, %{agent_id: _, stop_reason: "end_turn"}}
       assert_received {:completed, %{agent_id: _, output: "Done!"}}
+    end
+  end
+
+  describe "conversation mode" do
+    test "persists context across runs and links runs to the conversation", %{tenant: tenant} do
+      agent =
+        create_agent(tenant, %{
+          model_config: %{"mode" => "conversation", "context_window" => 20}
+        })
+
+      Fake.set_responses([
+        %{content: [%{"type" => "text", "text" => "First reply"}], stop_reason: "end_turn"},
+        %{content: [%{"type" => "text", "text" => "Second reply"}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} =
+        AgentProcess.start_link(
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          conversation_key: "slack:C123"
+        )
+
+      AgentProcess.send_message(pid, "first message")
+      Process.sleep(100)
+      first_run_id = AgentProcess.get_state(pid).run_id
+
+      AgentProcess.send_message(pid, "second message")
+      Process.sleep(100)
+      second_run_id = AgentProcess.get_state(pid).run_id
+
+      conversation = Conversations.get_conversation_by_agent_key!(agent.id, "slack:C123")
+      assert conversation.message_count == 4
+      assert length(conversation.messages) == 4
+
+      first_run = Runs.get_run!(first_run_id)
+      second_run = Runs.get_run!(second_run_id)
+
+      assert first_run.conversation_id == conversation.id
+      assert second_run.conversation_id == conversation.id
+
+      [first_call, second_call] = Fake.calls()
+      assert length(first_call.messages) == 1
+      assert length(second_call.messages) == 3
+      assert Enum.at(second_call.messages, 0).content == "first message"
+      assert Enum.at(second_call.messages, 2).content == "second message"
     end
   end
 end

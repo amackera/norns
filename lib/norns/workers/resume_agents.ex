@@ -18,7 +18,15 @@ defmodule Norns.Workers.ResumeAgents do
         Enum.each(runs, fn run ->
           Logger.info("Resuming orphaned run #{run.id} for agent #{run.agent_id}")
 
-          case Registry.resume_agent(run.id, run.agent_id, run.tenant_id) do
+          conversation_key =
+            case run.conversation do
+              %{key: key} -> key
+              _ -> "default"
+            end
+
+          case Registry.resume_agent(run.id, run.agent_id, run.tenant_id,
+                 conversation_key: conversation_key
+               ) do
             {:ok, _pid} ->
               Logger.info("Successfully resumed run #{run.id}")
 
@@ -36,9 +44,16 @@ defmodule Norns.Workers.ResumeAgents do
     runs =
       Run
       |> where([r], r.status == "running")
+      |> preload(:conversation)
       |> Repo.all()
       |> Enum.reject(fn run ->
-        Registry.alive?(run.tenant_id, run.agent_id)
+        conversation_key =
+          case run.conversation do
+            %{key: key} -> key
+            _ -> "default"
+          end
+
+        Registry.alive?(run.tenant_id, run.agent_id, conversation_key)
       end)
 
     {:ok, runs}

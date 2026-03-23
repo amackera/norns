@@ -1,0 +1,37 @@
+defmodule Norns.Conversations.Conversation do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  alias Norns.Types.JsonList
+
+  schema "conversations" do
+    field :key, :string
+    field :messages, JsonList, default: []
+    field :summary, :string
+    field :message_count, :integer, default: 0
+    field :token_estimate, :integer, default: 0
+
+    belongs_to :agent, Norns.Agents.Agent
+    belongs_to :tenant, Norns.Tenants.Tenant
+    has_many :runs, Norns.Runs.Run
+
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(conversation, attrs) do
+    conversation
+    |> cast(attrs, [
+      :agent_id,
+      :tenant_id,
+      :key,
+      :messages,
+      :summary,
+      :message_count,
+      :token_estimate
+    ])
+    |> validate_required([:agent_id, :tenant_id, :key])
+    |> foreign_key_constraint(:agent_id)
+    |> foreign_key_constraint(:tenant_id)
+    |> unique_constraint([:agent_id, :key])
+  end
+end

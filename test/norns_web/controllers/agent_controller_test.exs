@@ -108,14 +108,12 @@ defmodule NornsWeb.AgentControllerTest do
   end
 
   describe "POST /api/v1/agents/:id/messages" do
-    test "sends a message to running agent", %{conn: conn, tenant: tenant} do
+    test "accepts a message and starts the agent if needed", %{conn: conn, tenant: tenant} do
       Fake.set_responses([
         %{content: [%{"type" => "text", "text" => "ok"}], stop_reason: "end_turn"}
       ])
 
       agent = create_agent(tenant)
-      Norns.Agents.Registry.start_agent(agent.id, tenant.id)
-
       conn = post(conn, "/api/v1/agents/#{agent.id}/messages", %{"content" => "hello"})
       assert %{"status" => "accepted"} = json_response(conn, 202)
 
@@ -123,10 +121,56 @@ defmodule NornsWeb.AgentControllerTest do
       Norns.Agents.Registry.stop_agent(tenant.id, agent.id)
     end
 
-    test "returns 404 if agent not running", %{conn: conn, tenant: tenant} do
+    test "passes an optional conversation_key through", %{conn: conn, tenant: tenant} do
+      Fake.set_responses([
+        %{content: [%{"type" => "text", "text" => "ok"}], stop_reason: "end_turn"}
+      ])
+
+      agent =
+        create_agent(tenant, %{
+          model_config: %{"mode" => "conversation"}
+        })
+
+      conn =
+        post(conn, "/api/v1/agents/#{agent.id}/messages", %{
+          "content" => "hello",
+          "conversation_key" => "slack:C123"
+        })
+
+      assert %{"status" => "accepted"} = json_response(conn, 202)
+      Process.sleep(100)
+
+      conversation = Norns.Conversations.get_conversation_by_agent_key!(agent.id, "slack:C123")
+      assert conversation.message_count == 2
+
+      Norns.Agents.Registry.stop_agent(tenant.id, agent.id, "slack:C123")
+    end
+
+    test "returns 404 for unknown agent", %{conn: conn} do
+      conn = post(conn, "/api/v1/agents/999999/messages", %{"content" => "hello"})
+      assert %{"error" => "not found"} = json_response(conn, 404)
+    end
+  end
+
+  describe "conversation endpoints" do
+    test "lists, shows, and deletes conversations for an agent", %{conn: conn, tenant: tenant} do
       agent = create_agent(tenant)
-      conn = post(conn, "/api/v1/agents/#{agent.id}/messages", %{"content" => "hello"})
-      assert %{"error" => "agent not running"} = json_response(conn, 404)
+      {:ok, conversation} =
+        Norns.Conversations.create_conversation(%{
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          key: "slack:C123",
+          messages: [%{role: "user", content: "hi"}]
+        })
+
+      conn = get(conn, "/api/v1/agents/#{agent.id}/conversations")
+      assert %{"data" => [%{"key" => "slack:C123"}]} = json_response(conn, 200)
+
+      conn = get(conn, "/api/v1/agents/#{agent.id}/conversations/#{conversation.key}")
+      assert %{"data" => %{"key" => "slack:C123"}} = json_response(conn, 200)
+
+      conn = delete(conn, "/api/v1/agents/#{agent.id}/conversations/#{conversation.key}")
+      assert %{"status" => "deleted"} = json_response(conn, 200)
     end
   end
 

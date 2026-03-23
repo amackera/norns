@@ -25,6 +25,12 @@ defmodule Norns.Agents.RegistryTest do
       {:ok, _pid} = Registry.start_agent(agent.id, tenant.id)
       assert {:error, {:already_started, _}} = Registry.start_agent(agent.id, tenant.id)
     end
+
+    test "allows separate processes per conversation key", %{tenant: tenant, agent: agent} do
+      assert {:ok, pid1} = Registry.start_agent(agent.id, tenant.id, conversation_key: "conv-1")
+      assert {:ok, pid2} = Registry.start_agent(agent.id, tenant.id, conversation_key: "conv-2")
+      assert pid1 != pid2
+    end
   end
 
   describe "lookup/2" do
@@ -38,19 +44,15 @@ defmodule Norns.Agents.RegistryTest do
     end
   end
 
-  describe "send_message/3" do
-    test "delivers message to running agent", %{tenant: tenant, agent: agent} do
+  describe "send_message/4" do
+    test "delivers message and starts the agent if needed", %{tenant: tenant, agent: agent} do
       Fake.set_responses([
         %{content: [%{"type" => "text", "text" => "hi back"}], stop_reason: "end_turn"}
       ])
 
-      {:ok, _pid} = Registry.start_agent(agent.id, tenant.id)
       assert :ok = Registry.send_message(tenant.id, agent.id, "hello")
       Process.sleep(100)
-    end
-
-    test "returns error when agent not running", %{tenant: tenant} do
-      assert {:error, :not_found} = Registry.send_message(tenant.id, -1, "hello")
+      assert {:ok, _pid} = Registry.lookup(tenant.id, agent.id)
     end
   end
 

@@ -25,7 +25,18 @@ defmodule Norns.LLM.Fake do
     # Store in an ETS table so GenServer processes can access them
     ensure_table()
     :ets.insert(__MODULE__, {:responses, responses})
+    :ets.insert(__MODULE__, {:calls, []})
     :ok
+  end
+
+  @doc "Return recorded chat calls."
+  def calls do
+    ensure_table()
+
+    case :ets.lookup(__MODULE__, :calls) do
+      [{:calls, calls}] -> Enum.reverse(calls)
+      _ -> []
+    end
   end
 
   @doc "Get and consume the next scripted response."
@@ -47,7 +58,8 @@ defmodule Norns.LLM.Fake do
   end
 
   @impl true
-  def chat(_api_key, _model, _system_prompt, _messages, _opts \\ []) do
+  def chat(_api_key, _model, system_prompt, messages, opts \\ []) do
+    record_call(%{system_prompt: system_prompt, messages: messages, opts: opts})
     response = next_response()
 
     response =
@@ -64,5 +76,17 @@ defmodule Norns.LLM.Fake do
       _ ->
         :ok
     end
+  end
+
+  defp record_call(call) do
+    ensure_table()
+
+    calls =
+      case :ets.lookup(__MODULE__, :calls) do
+        [{:calls, existing}] -> existing
+        _ -> []
+      end
+
+    :ets.insert(__MODULE__, {:calls, [call | calls]})
   end
 end

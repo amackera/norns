@@ -178,12 +178,14 @@ defmodule Norns.Agents.ProcessRecoveryTest do
 
       assert rebuilt.status == :running
       assert rebuilt.step == 1
-      assert length(rebuilt.messages) == 2
+      assert length(rebuilt.messages) == 3
 
-      [assistant_msg, user_msg] = rebuilt.messages
+      [original_user_msg, assistant_msg, tool_result_msg] = rebuilt.messages
+      assert original_user_msg.role == "user"
+      assert original_user_msg.content == "test"
       assert assistant_msg.role == "assistant"
-      assert user_msg.role == "user"
-      assert is_list(user_msg.content)
+      assert tool_result_msg.role == "user"
+      assert is_list(tool_result_msg.content)
     end
 
     test "uses checkpoint when available", %{tenant: tenant, agent: agent} do

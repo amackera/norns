@@ -8,8 +8,8 @@ defmodule Norns.Runs do
   alias Norns.Repo
   alias Norns.Runs.{Run, RunEvent}
 
-  def get_run(id), do: Repo.get(Run, id)
-  def get_run!(id), do: Repo.get!(Run, id)
+  def get_run(id), do: Repo.get(Run, id) |> Repo.preload(:conversation)
+  def get_run!(id), do: Repo.get!(Run, id) |> Repo.preload(:conversation)
 
   def list_runs(agent_id) do
     Run

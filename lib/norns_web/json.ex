@@ -9,6 +9,9 @@ defmodule NornsWeb.JSON do
       status: agent.status,
       system_prompt: agent.system_prompt,
       model: agent.model,
+      mode: Map.get(agent.model_config || %{}, "mode", "task"),
+      context_strategy: Map.get(agent.model_config || %{}, "context_strategy", "sliding_window"),
+      context_window: Map.get(agent.model_config || %{}, "context_window", 20),
       max_steps: agent.max_steps,
       inserted_at: agent.inserted_at,
       updated_at: agent.updated_at
@@ -19,6 +22,7 @@ defmodule NornsWeb.JSON do
     %{
       id: run.id,
       agent_id: run.agent_id,
+      conversation_id: run.conversation_id,
       status: run.status,
       trigger_type: run.trigger_type,
       input: run.input,
@@ -36,6 +40,19 @@ defmodule NornsWeb.JSON do
       payload: event.payload,
       source: event.source,
       inserted_at: event.inserted_at
+    }
+  end
+
+  def conversation(conversation) do
+    %{
+      id: conversation.id,
+      agent_id: conversation.agent_id,
+      key: conversation.key,
+      summary: conversation.summary,
+      message_count: conversation.message_count,
+      token_estimate: conversation.token_estimate,
+      inserted_at: conversation.inserted_at,
+      updated_at: conversation.updated_at
     }
   end
 end

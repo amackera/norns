@@ -35,6 +35,9 @@ defmodule NornsWeb.Router do
       get "/status", AgentController, :status
       post "/messages", AgentController, :send_message
       get "/runs", AgentController, :runs
+      get "/conversations", ConversationController, :index
+      get "/conversations/:key", ConversationController, :show
+      delete "/conversations/:key", ConversationController, :delete
     end
 
     get "/runs/:id", RunController, :show

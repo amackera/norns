@@ -54,5 +54,23 @@ defmodule Norns.Agents.AgentDefTest do
       agent_def = AgentDef.from_agent(agent)
       assert agent_def.on_failure == :retry_last_step
     end
+
+    test "reads mode and context defaults from model_config" do
+      tenant = create_tenant()
+
+      agent =
+        create_agent(tenant, %{
+          model_config: %{
+            "mode" => "conversation",
+            "context_strategy" => "none",
+            "context_window" => "12"
+          }
+        })
+
+      agent_def = AgentDef.from_agent(agent)
+      assert agent_def.mode == :conversation
+      assert agent_def.context_strategy == :none
+      assert agent_def.context_window == 12
+    end
   end
 end

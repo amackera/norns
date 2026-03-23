@@ -75,13 +75,15 @@ defmodule NornsWeb.AgentController do
     end
   end
 
-  def send_message(conn, %{"agent_id" => agent_id, "content" => content}) do
+  def send_message(conn, %{"agent_id" => agent_id, "content" => content} = params) do
     tenant = conn.assigns.current_tenant
+    conversation_key = Map.get(params, "conversation_key")
+    opts = if is_binary(conversation_key) and conversation_key != "", do: [conversation_key: conversation_key], else: []
 
     with {:ok, agent} <- fetch_agent(agent_id, tenant.id) do
-      case Registry.send_message(tenant.id, agent.id, content) do
+      case Registry.send_message(tenant.id, agent.id, content, opts) do
         :ok -> conn |> put_status(202) |> json(%{status: "accepted"})
-        {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "agent not running"})
+        {:error, reason} -> conn |> put_status(500) |> json(%{error: inspect(reason)})
       end
     end
   end
