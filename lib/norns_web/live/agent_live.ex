@@ -74,7 +74,7 @@ defmodule NornsWeb.AgentLive do
 
     <%!-- Controls --%>
     <div class="flex items-center gap-3 mb-6">
-      <%= if @state && @state.status != :stopped do %>
+      <%= if @state && @state.status not in [:stopped] do %>
         <button phx-click="stop" class="text-xs text-red-400 hover:text-red-300 border border-red-900 px-3 py-1.5 rounded">
           stop
         </button>
@@ -84,7 +84,7 @@ defmodule NornsWeb.AgentLive do
         </button>
       <% end %>
 
-      <%= if @state && @state.status != :stopped do %>
+      <%= if @state && @state.status not in [:stopped, :waiting] do %>
         <form phx-submit="send_message" class="flex items-center gap-2 flex-1">
           <input type="text" name="content" value={@message} placeholder="Send a message..."
             class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-gray-500" />
@@ -94,6 +94,25 @@ defmodule NornsWeb.AgentLive do
         </form>
       <% end %>
     </div>
+
+    <%!-- Waiting for user response --%>
+    <%= if @state && @state.status == :waiting do %>
+      <div class="bg-yellow-900/20 border border-yellow-800 rounded p-4 mb-6">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot"></span>
+          <span class="text-sm font-medium text-yellow-300">Agent is waiting for your response</span>
+        </div>
+        <p class="text-sm text-gray-300 mb-3"><%= @state[:pending_question] || "The agent needs your input to continue." %></p>
+        <form phx-submit="send_message" class="flex items-center gap-2">
+          <input type="text" name="content" value={@message} placeholder="Type your response..."
+            autofocus
+            class="flex-1 bg-gray-900 border border-yellow-700 rounded px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-yellow-500" />
+          <button type="submit" class="text-xs text-yellow-400 hover:text-yellow-300 border border-yellow-800 px-3 py-1.5 rounded">
+            respond
+          </button>
+        </form>
+      </div>
+    <% end %>
 
     <%!-- Live events --%>
     <%= if @events != [] do %>
@@ -198,6 +217,18 @@ defmodule NornsWeb.AgentLive do
     {:noreply, assign(socket, events: events, runs: runs, state: state)}
   end
 
+  def handle_info({:waiting, %{question: question}}, socket) do
+    events = [%{type: "waiting", detail: question} | socket.assigns.events]
+    state = get_process_state(socket.assigns.tenant.id, socket.assigns.agent.id)
+    {:noreply, assign(socket, events: events, state: state)}
+  end
+
+  def handle_info({:agent_resumed, _payload}, socket) do
+    events = [%{type: "resumed", detail: "user responded"} | socket.assigns.events]
+    state = get_process_state(socket.assigns.tenant.id, socket.assigns.agent.id)
+    {:noreply, assign(socket, events: events, state: state)}
+  end
+
   def handle_info({:error, %{error: reason}}, socket) do
     events = [%{type: "error", detail: String.slice(reason, 0, 100)} | socket.assigns.events]
     state = get_process_state(socket.assigns.tenant.id, socket.assigns.agent.id)
@@ -221,6 +252,7 @@ defmodule NornsWeb.AgentLive do
   end
 
   defp status_color(%{status: :running}), do: "bg-green-400 animate-pulse-dot"
+  defp status_color(%{status: :waiting}), do: "bg-yellow-400 animate-pulse-dot"
   defp status_color(%{status: :idle}), do: "bg-blue-400"
   defp status_color(_), do: "bg-gray-600"
 
@@ -230,6 +262,8 @@ defmodule NornsWeb.AgentLive do
   defp run_status_color(_), do: "bg-gray-600"
 
   defp event_color(%{type: "message_sent"}), do: "text-white"
+  defp event_color(%{type: "waiting"}), do: "text-yellow-400"
+  defp event_color(%{type: "resumed"}), do: "text-green-400"
   defp event_color(%{type: "tool_call"}), do: "text-yellow-400"
   defp event_color(%{type: "tool_result"}), do: "text-yellow-300"
   defp event_color(%{type: "llm_response"}), do: "text-blue-400"

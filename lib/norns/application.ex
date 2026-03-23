@@ -26,6 +26,7 @@ defmodule Norns.Application do
         Norns.Tools.Registry.register(Norns.Tools.WebSearch)
         Norns.Tools.Registry.register(Norns.Tools.Http)
         Norns.Tools.Registry.register(Norns.Tools.Shell)
+        Norns.Tools.Registry.register(Norns.Tools.AskUser)
         Norns.Workers.ResumeAgents.resume_orphans()
         result
 

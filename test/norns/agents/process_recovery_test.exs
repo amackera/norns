@@ -170,7 +170,8 @@ defmodule Norns.Agents.ProcessRecoveryTest do
         step: 0,
         max_steps: 50,
         run: nil,
-        status: :idle
+        status: :idle,
+        pending_ask: nil
       }
 
       {:ok, rebuilt} = AgentProcess.rebuild_state(run.id, base_state)
@@ -226,7 +227,8 @@ defmodule Norns.Agents.ProcessRecoveryTest do
         step: 0,
         max_steps: 50,
         run: nil,
-        status: :idle
+        status: :idle,
+        pending_ask: nil
       }
 
       {:ok, rebuilt} = AgentProcess.rebuild_state(run.id, base_state)

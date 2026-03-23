@@ -89,7 +89,7 @@ defmodule NornsWeb.RunLive do
 
   @impl true
   def handle_info({event, _payload}, socket)
-      when event in [:llm_response, :tool_call, :tool_result, :completed, :error] do
+      when event in [:llm_response, :tool_call, :tool_result, :completed, :error, :waiting, :agent_resumed] do
     run = Runs.get_run!(socket.assigns.run.id)
     events = Runs.list_events(run.id)
     {:noreply, assign(socket, run: run, events: events)}
@@ -99,6 +99,7 @@ defmodule NornsWeb.RunLive do
 
   defp run_status_color("completed"), do: "bg-green-400"
   defp run_status_color("running"), do: "bg-blue-400 animate-pulse-dot"
+  defp run_status_color("waiting"), do: "bg-yellow-400 animate-pulse-dot"
   defp run_status_color("failed"), do: "bg-red-400"
   defp run_status_color(_), do: "bg-gray-600"
 
@@ -110,6 +111,8 @@ defmodule NornsWeb.RunLive do
   defp event_type_color("retry"), do: "text-orange-400"
   defp event_type_color("agent_completed"), do: "text-green-400"
   defp event_type_color("agent_error"), do: "text-red-400"
+  defp event_type_color("waiting_for_user"), do: "text-yellow-400"
+  defp event_type_color("user_response"), do: "text-white"
   defp event_type_color("agent_started"), do: "text-gray-400"
   defp event_type_color(_), do: "text-gray-500"
 
@@ -119,12 +122,16 @@ defmodule NornsWeb.RunLive do
   defp event_summary(%{event_type: "checkpoint", payload: %{"step" => s}}), do: "step #{s}"
   defp event_summary(%{event_type: "retry", payload: %{"attempt" => a}}), do: "attempt #{a}"
   defp event_summary(%{event_type: "agent_error", payload: %{"error" => e}}), do: String.slice(e, 0, 60)
+  defp event_summary(%{event_type: "waiting_for_user", payload: %{"question" => q}}), do: String.slice(q, 0, 80)
+  defp event_summary(%{event_type: "user_response", payload: %{"content" => c}}), do: String.slice(c, 0, 80)
   defp event_summary(_), do: ""
 
   defp event_detail(%{event_type: "tool_call", payload: %{"input" => input}}), do: inspect(input, pretty: true, limit: 200)
   defp event_detail(%{event_type: "tool_result", payload: %{"content" => c}}) when is_binary(c), do: String.slice(c, 0, 200)
   defp event_detail(%{event_type: "llm_response", payload: %{"usage" => %{"input_tokens" => i, "output_tokens" => o}}}), do: "#{i} in / #{o} out tokens"
   defp event_detail(%{event_type: "agent_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 200)
+  defp event_detail(%{event_type: "waiting_for_user", payload: %{"question" => q}}), do: q
+  defp event_detail(%{event_type: "user_response", payload: %{"content" => c}}), do: c
   defp event_detail(_), do: nil
 
   defp format_time(nil), do: ""

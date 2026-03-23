@@ -19,7 +19,7 @@ defmodule Norns.Runs.Run do
     run
     |> cast(attrs, [:tenant_id, :agent_id, :status, :trigger_type, :input, :output])
     |> validate_required([:tenant_id, :agent_id, :status, :trigger_type])
-    |> validate_inclusion(:status, ["pending", "running", "completed", "failed"])
+    |> validate_inclusion(:status, ["pending", "running", "waiting", "completed", "failed"])
     |> foreign_key_constraint(:agent_id)
     |> foreign_key_constraint(:tenant_id)
   end
