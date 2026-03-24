@@ -25,8 +25,10 @@ defmodule Norns.Agents.RunnerTest do
       events = Runs.list_events(run.id)
       event_types = Enum.map(events, & &1.event_type)
       assert "run_started" in event_types
+      assert "llm_request" in event_types
       assert "llm_response" in event_types
       assert "run_completed" in event_types
+      assert Enum.all?(events, &(&1.payload["schema_version"] == 1))
     end
   end
 end

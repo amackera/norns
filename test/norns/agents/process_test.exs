@@ -42,10 +42,10 @@ defmodule Norns.Agents.ProcessTest do
       events = Runs.list_events(run.id)
       event_types = Enum.map(events, & &1.event_type)
 
-      assert "agent_started" in event_types
+      assert "run_started" in event_types
       assert "llm_request" in event_types
       assert "llm_response" in event_types
-      assert "agent_completed" in event_types
+      assert "run_completed" in event_types
     end
 
     test "task mode starts fresh on each run", %{tenant: tenant, agent: agent} do
@@ -155,8 +155,10 @@ defmodule Norns.Agents.ProcessTest do
       assert run.status == "failed"
 
       events = Runs.list_events(run.id)
-      error_event = Enum.find(events, &(&1.event_type == "agent_error"))
+      error_event = Enum.find(events, &(&1.event_type == "run_failed"))
       assert error_event.payload["error"] =~ "Max steps"
+      assert error_event.payload["error_class"] == "internal"
+      assert error_event.payload["retry_decision"] == "terminal"
     end
   end
 

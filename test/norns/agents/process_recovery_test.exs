@@ -26,7 +26,7 @@ defmodule Norns.Agents.ProcessRecoveryTest do
         })
 
       # Simulate events that would have been logged before a crash
-      Runs.append_event(run, %{event_type: "agent_started", source: "system"})
+      Runs.append_event(run, %{event_type: "run_started", source: "system"})
 
       Runs.append_event(run, %{
         event_type: "llm_request",
@@ -100,12 +100,12 @@ defmodule Norns.Agents.ProcessRecoveryTest do
       event_types = Enum.map(all_events, & &1.event_type)
 
       # Original events still present
-      assert "agent_started" in event_types
+      assert "run_started" in event_types
       assert "tool_call" in event_types
       assert "tool_result" in event_types
 
       # New events from resume
-      assert "agent_completed" in event_types
+      assert "run_completed" in event_types
 
       # The LLM was called with the reconstructed message history
       # (assistant tool_use + user tool_result already in messages)
@@ -126,7 +126,7 @@ defmodule Norns.Agents.ProcessRecoveryTest do
           status: "running"
         })
 
-      Runs.append_event(run, %{event_type: "agent_started", source: "system"})
+      Runs.append_event(run, %{event_type: "run_started", source: "system"})
 
       Runs.append_event(run, %{
         event_type: "llm_response",
@@ -137,7 +137,8 @@ defmodule Norns.Agents.ProcessRecoveryTest do
             %{"type" => "tool_use", "id" => "c1", "name" => "web_search", "input" => %{"query" => "test"}}
           ],
           "stop_reason" => "tool_use",
-          "step" => 1
+          "step" => 1,
+          "usage" => %{}
         }
       })
 
@@ -198,12 +199,12 @@ defmodule Norns.Agents.ProcessRecoveryTest do
           status: "running"
         })
 
-      Runs.append_event(run, %{event_type: "agent_started", source: "system"})
+      Runs.append_event(run, %{event_type: "run_started", source: "system"})
 
       Runs.append_event(run, %{
         event_type: "llm_response",
         source: "system",
-        payload: %{"content" => [%{"type" => "text", "text" => "old"}], "step" => 1}
+        payload: %{"content" => [%{"type" => "text", "text" => "old"}], "stop_reason" => "end_turn", "usage" => %{}, "step" => 1}
       })
 
       checkpoint_messages = [
@@ -212,7 +213,7 @@ defmodule Norns.Agents.ProcessRecoveryTest do
       ]
 
       Runs.append_event(run, %{
-        event_type: "checkpoint",
+        event_type: "checkpoint_saved",
         source: "system",
         payload: %{"messages" => checkpoint_messages, "step" => 5}
       })

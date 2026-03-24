@@ -6,23 +6,30 @@ defmodule Norns.Agents.Runner do
 
   alias Norns.Runs
   alias Norns.LLM
+  alias Norns.Runtime.{Errors, Events, ErrorPolicy}
 
   def execute(%{id: agent_id, tenant_id: tenant_id} = agent, input, tenant) do
     api_key = tenant.api_keys["anthropic"] || ""
 
-    with {:ok, run} <- create_run(agent, input),
-         {:ok, _} <- Runs.append_event(run, %{event_type: "run_started", source: "system"}),
-         {:ok, run} <- Runs.update_run(run, %{status: "running"}),
-         {:ok, response} <- call_llm(api_key, agent, input),
-         {:ok, _} <- log_llm_response(run, response),
-         {:ok, run} <- Runs.update_run(run, %{status: "completed", output: response}) do
-      Runs.append_event(run, %{event_type: "run_completed", source: "system"})
-      {:ok, run}
-    else
-      {:error, reason} = err ->
-        # Best-effort: try to mark the run as failed if it exists
-        handle_failure(agent_id, tenant_id, input, reason)
-        err
+    case create_run(agent, input) do
+      {:ok, run} ->
+        with {:ok, _} <- append(run, Events.run_started()),
+             {:ok, run} <- Runs.update_run(run, %{status: "running"}),
+             {:ok, _} <- append(run, Events.llm_request(%{"step" => 1, "message_count" => 1})),
+             {:ok, response} <- call_llm(api_key, agent, input),
+             {:ok, _} <- log_llm_response(run, response),
+             {:ok, run} <- Runs.update_run(run, %{status: "completed", output: response, failure_metadata: %{}}),
+             {:ok, _} <- append(run, Events.run_completed(%{"output" => response})) do
+          {:ok, run}
+        else
+          {:error, reason} ->
+            handle_failure(run, agent_id, tenant_id, reason)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        handle_failure(nil, agent_id, tenant_id, reason)
+        {:error, reason}
     end
   end
 
@@ -44,20 +51,37 @@ defmodule Norns.Agents.Runner do
   end
 
   defp log_llm_response(run, response) do
-    Runs.append_event(run, %{
-      event_type: "llm_response",
-      source: "system",
-      payload: %{"response" => response}
-    })
+    append(
+      run,
+      Events.llm_response(%{
+        "content" => [%{"type" => "text", "text" => response}],
+        "stop_reason" => "end_turn",
+        "usage" => %{},
+        "step" => 1
+      })
+    )
   end
 
-  defp handle_failure(agent_id, tenant_id, _input, reason) do
-    # If we already have a run in the DB, we could look it up and mark failed.
-    # For now, just log — the run's status stays wherever it was.
+  defp handle_failure(run, agent_id, tenant_id, reason) do
     require Logger
+
+    error = Errors.classify(reason)
+    decision = ErrorPolicy.decision(error, 0)
+    failure_payload = Errors.to_metadata(error) |> Map.put("retry_decision", decision.retry_decision)
+
+    if run do
+      append(run, Events.run_failed(failure_payload))
+      Runs.update_run(run, %{
+        status: "failed",
+        failure_metadata: Map.put(failure_payload, "schema_version", Norns.Runtime.EventValidator.schema_version())
+      })
+    end
 
     Logger.error(
       "Agent run failed: agent_id=#{agent_id} tenant_id=#{tenant_id} reason=#{inspect(reason)}"
     )
   end
+
+  defp append(run, {:ok, event}), do: Runs.append_event(run, event)
+  defp append(_run, {:error, reason}), do: {:error, reason}
 end

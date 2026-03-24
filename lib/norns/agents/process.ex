@@ -13,11 +13,8 @@ defmodule Norns.Agents.Process do
 
   alias Norns.{Agents, Conversations, LLM, Runs, Tenants}
   alias Norns.Agents.AgentDef
+  alias Norns.Runtime.{ErrorPolicy, Errors, Events}
   alias Norns.Tools.{Executor, Tool}
-
-  @max_retries 3
-  @max_rate_limit_retries 10
-  @rate_limit_base_delay_ms 15_000
   @tool_result_cap 200
 
   # -- Public API --
@@ -75,7 +72,9 @@ defmodule Norns.Agents.Process do
       retry_count: 0,
       run: nil,
       status: :idle,
-      pending_ask: nil
+      pending_ask: nil,
+      resume_action: nil,
+      test_pid: Keyword.get(opts, :test_pid)
     }
 
     state = load_conversation_state(state)
@@ -102,10 +101,10 @@ defmodule Norns.Agents.Process do
         status: "pending"
       })
 
-    Runs.append_event(run, %{event_type: "agent_started", source: "system"})
+    append(run, Events.run_started())
     {:ok, run} = Runs.update_run(run, %{status: "running"})
 
-    state = %{state | run: run, messages: messages, step: 0, retry_count: 0, status: :running}
+    state = %{state | run: run, messages: messages, step: 0, retry_count: 0, status: :running, resume_action: nil}
 
     broadcast(state, :agent_started, %{run_id: run.id})
     {:noreply, state, {:continue, :llm_loop}}
@@ -113,11 +112,7 @@ defmodule Norns.Agents.Process do
 
   def handle_cast({:send_message, content}, %{status: :waiting, pending_ask: pending} = state)
       when not is_nil(pending) do
-    Runs.append_event(state.run, %{
-      event_type: "user_response",
-      source: "user",
-      payload: %{"content" => content, "tool_use_id" => pending.tool_use_id, "step" => state.step}
-    })
+    append(state.run, Events.user_response(%{"content" => content, "tool_use_id" => pending.tool_use_id, "step" => state.step}))
 
     ask_result = %{
       "type" => "tool_result",
@@ -132,7 +127,6 @@ defmodule Norns.Agents.Process do
 
     Runs.update_run(state.run, %{status: "running"})
     broadcast(state, :agent_resumed, %{run_id: state.run.id})
-
     state = maybe_checkpoint(state, :tool_result)
     {:noreply, state, {:continue, :llm_loop}}
   end
@@ -167,11 +161,7 @@ defmodule Norns.Agents.Process do
     else
       state = %{state | step: state.step + 1}
 
-      Runs.append_event(state.run, %{
-        event_type: "llm_request",
-        source: "system",
-        payload: %{"step" => state.step, "message_count" => length(state.messages)}
-      })
+      append(state.run, Events.llm_request(%{"step" => state.step, "message_count" => length(state.messages)}))
 
       api_tools = Enum.map(state.agent_def.tools, &Tool.to_api_format/1)
       opts = if api_tools == [], do: [], else: [tools: api_tools]
@@ -198,7 +188,8 @@ defmodule Norns.Agents.Process do
     case rebuild_state(run_id, state) do
       {:ok, resumed_state} ->
         broadcast(resumed_state, :agent_resumed, %{run_id: run_id})
-        {:noreply, resumed_state, {:continue, :llm_loop}}
+        action = resumed_state.resume_action || :llm_loop
+        {:noreply, %{resumed_state | resume_action: nil}, {:continue, action}}
 
       {:error, reason} ->
         Logger.error("Failed to resume run #{run_id}: #{inspect(reason)}")
@@ -207,23 +198,34 @@ defmodule Norns.Agents.Process do
   end
 
   def handle_continue({:execute_tools, tool_use_blocks}, state) do
+    handle_tool_execution(state, tool_use_blocks, true)
+  end
+
+  def handle_continue({:resume_tools, tool_use_blocks}, state) do
+    handle_tool_execution(state, tool_use_blocks, false)
+  end
+
+  defp handle_tool_execution(state, tool_use_blocks, log_calls?) do
     {ask_blocks, regular_blocks} =
       Enum.split_with(tool_use_blocks, fn block -> block["name"] == "ask_user" end)
 
     Enum.each(regular_blocks, fn block ->
-      Runs.append_event(state.run, %{
-        event_type: "tool_call",
-        source: "system",
-        payload: %{
-          "tool_use_id" => block["id"],
-          "name" => block["name"],
-          "input" => block["input"],
-          "step" => state.step
-        }
-      })
+      if log_calls? do
+        append(
+          state.run,
+          Events.tool_call(%{
+            "tool_use_id" => block["id"],
+            "name" => block["name"],
+            "input" => block["input"],
+            "step" => state.step
+          })
+        )
 
-      broadcast(state, :tool_call, %{name: block["name"], input: block["input"]})
+        broadcast(state, :tool_call, %{name: block["name"], input: block["input"]})
+      end
     end)
+
+    maybe_invoke_test_hook(state, :after_tool_call_persisted, %{blocks: regular_blocks, step: state.step})
 
     regular_results =
       if regular_blocks == [] do
@@ -241,16 +243,15 @@ defmodule Norns.Agents.Process do
           end
 
         Enum.each(results, fn result ->
-          Runs.append_event(state.run, %{
-            event_type: "tool_result",
-            source: "system",
-            payload: %{
+          append(
+            state.run,
+            Events.tool_result(%{
               "tool_use_id" => result["tool_use_id"],
               "content" => result["content"],
               "is_error" => Map.get(result, "is_error", false),
               "step" => state.step
-            }
-          })
+            })
+          )
 
           broadcast(state, :tool_result, %{
             tool_use_id: result["tool_use_id"],
@@ -265,22 +266,19 @@ defmodule Norns.Agents.Process do
       [ask_block | _] ->
         question = get_in(ask_block, ["input", "question"]) || "What would you like me to do?"
 
-        Runs.append_event(state.run, %{
-          event_type: "tool_call",
-          source: "system",
-          payload: %{
-            "tool_use_id" => ask_block["id"],
-            "name" => "ask_user",
-            "input" => ask_block["input"],
-            "step" => state.step
-          }
-        })
+        if log_calls? do
+          append(
+            state.run,
+            Events.tool_call(%{
+              "tool_use_id" => ask_block["id"],
+              "name" => "ask_user",
+              "input" => ask_block["input"],
+              "step" => state.step
+            })
+          )
+        end
 
-        Runs.append_event(state.run, %{
-          event_type: "waiting_for_user",
-          source: "system",
-          payload: %{"question" => question, "tool_use_id" => ask_block["id"], "step" => state.step}
-        })
+        append(state.run, Events.waiting_for_user(%{"question" => question, "tool_use_id" => ask_block["id"], "step" => state.step}))
 
         Runs.update_run(state.run, %{status: "waiting"})
 
@@ -314,10 +312,9 @@ defmodule Norns.Agents.Process do
   # -- Internal --
 
   defp handle_llm_response(state, response) do
-    Runs.append_event(state.run, %{
-      event_type: "llm_response",
-      source: "system",
-      payload: %{
+    append(
+      state.run,
+      Events.llm_response(%{
         "content" => response.content,
         "stop_reason" => response.stop_reason,
         "usage" => %{
@@ -325,8 +322,8 @@ defmodule Norns.Agents.Process do
           "output_tokens" => response.usage.output_tokens
         },
         "step" => state.step
-      }
-    })
+      })
+    )
 
     messages = state.messages ++ [%{role: "assistant", content: response.content}]
     state = %{state | messages: messages}
@@ -353,45 +350,37 @@ defmodule Norns.Agents.Process do
   end
 
   defp handle_llm_error(state, reason) do
-    {max_retries, delay} = retry_params(reason, state.retry_count)
+    error = Errors.classify(reason)
+    decision = ErrorPolicy.decision(error, state.retry_count)
 
-    if state.agent_def.on_failure == :retry_last_step and state.retry_count < max_retries do
+    if state.agent_def.on_failure == :retry_last_step and decision.action == :retry do
       retry_count = state.retry_count + 1
 
       Logger.warning(
-        "LLM call failed (attempt #{retry_count}/#{max_retries}), retrying in #{delay}ms: #{inspect(reason)}"
+        "LLM call failed (attempt #{retry_count}), retrying in #{decision.delay_ms}ms: #{inspect(reason)}"
       )
 
-      Runs.append_event(state.run, %{
-        event_type: "retry",
-        source: "system",
-        payload: %{
-          "error" => inspect(reason),
+      append(
+        state.run,
+        Events.retry(%{
+          "error" => error.message,
           "attempt" => retry_count,
-          "delay_ms" => delay,
-          "step" => state.step
-        }
-      })
+          "delay_ms" => decision.delay_ms,
+          "step" => state.step,
+          "error_class" => Atom.to_string(error.class),
+          "error_code" => Atom.to_string(error.code),
+          "retry_decision" => decision.retry_decision
+        })
+      )
 
       state = %{state | step: state.step - 1, retry_count: retry_count}
-      Process.send_after(self(), :retry_llm, delay)
+      Process.send_after(self(), :retry_llm, decision.delay_ms)
       {:noreply, state}
     else
       Logger.error("LLM call failed: #{inspect(reason)}")
-      {:noreply, complete_with_error(state, "LLM error: #{inspect(reason)}")}
+      {:noreply, complete_with_error(state, error, decision.retry_decision)}
     end
   end
-
-  defp retry_params(reason, retry_count) do
-    if rate_limit_error?(reason) do
-      {@max_rate_limit_retries, @rate_limit_base_delay_ms * (retry_count + 1)}
-    else
-      {@max_retries, 1000 * Integer.pow(2, retry_count)}
-    end
-  end
-
-  defp rate_limit_error?({429, _}), do: true
-  defp rate_limit_error?(_), do: false
 
   defp compact_messages(messages) when length(messages) <= 4, do: messages
 
@@ -425,13 +414,9 @@ defmodule Norns.Agents.Process do
         _ -> nil
       end) || ""
 
-    Runs.append_event(state.run, %{
-      event_type: "agent_completed",
-      source: "system",
-      payload: %{"output" => text}
-    })
+    append(state.run, Events.run_completed(%{"output" => text}))
 
-    {:ok, run} = Runs.update_run(state.run, %{status: "completed", output: text})
+    {:ok, run} = Runs.update_run(state.run, %{status: "completed", output: text, failure_metadata: %{}})
     state = %{state | run: run}
     state = persist_conversation_messages(state)
 
@@ -439,18 +424,28 @@ defmodule Norns.Agents.Process do
     finish_run(state)
   end
 
-  defp complete_with_error(state, reason) do
-    Runs.append_event(state.run, %{
-      event_type: "agent_error",
-      source: "system",
-      payload: %{"error" => reason}
-    })
+  defp complete_with_error(state, reason) when is_binary(reason) do
+    error = Errors.classify({:internal, reason})
+    complete_with_error(state, error, "terminal")
+  end
 
-    {:ok, run} = Runs.update_run(state.run, %{status: "failed"})
+  defp complete_with_error(state, %Errors.Error{} = error, retry_decision) do
+    payload =
+      Errors.to_metadata(error)
+      |> Map.put("retry_decision", retry_decision)
+
+    append(state.run, Events.run_failed(payload))
+
+    {:ok, run} =
+      Runs.update_run(state.run, %{
+        status: "failed",
+        failure_metadata: Map.put(payload, "schema_version", Norns.Runtime.EventValidator.schema_version())
+      })
+
     state = %{state | run: run}
     state = persist_conversation_messages(state)
 
-    broadcast(state, :error, %{error: reason})
+    broadcast(state, :error, %{error: error.message})
     finish_run(state)
   end
 
@@ -471,14 +466,15 @@ defmodule Norns.Agents.Process do
       end
 
     if should_checkpoint do
-      Runs.append_event(state.run, %{
-        event_type: "checkpoint",
-        source: "system",
-        payload: %{
+      maybe_invoke_test_hook(state, :before_checkpoint_write, %{context: context, step: state.step})
+
+      append(
+        state.run,
+        Events.checkpoint_saved(%{
           "messages" => state.messages,
           "step" => state.step
-        }
-      })
+        })
+      )
     end
 
     state
@@ -586,7 +582,7 @@ defmodule Norns.Agents.Process do
     else
       base_state = restore_conversation_for_run(base_state, run)
       initial_messages = initial_messages_for_replay(base_state, run)
-      {messages, step, pending_ask} = replay_from_events(initial_messages, events)
+      {messages, step, pending_ask, resume_action} = replay_from_events(initial_messages, events)
       status = if pending_ask, do: :waiting, else: :running
 
       {:ok,
@@ -596,7 +592,8 @@ defmodule Norns.Agents.Process do
            messages: messages,
            step: step,
            status: status,
-           pending_ask: pending_ask
+           pending_ask: pending_ask,
+           resume_action: resume_action
        }}
     end
   end
@@ -624,66 +621,99 @@ defmodule Norns.Agents.Process do
     checkpoint =
       events
       |> Enum.reverse()
-      |> Enum.find(fn event -> event.event_type == "checkpoint" end)
+      |> Enum.find(fn event -> event.event_type in ["checkpoint_saved", "checkpoint"] end)
 
     case checkpoint do
       %{payload: %{"messages" => messages, "step" => step}} ->
         post_checkpoint = Enum.drop_while(events, fn event -> event.sequence <= checkpoint.sequence end)
-        replay_events_onto(normalize_messages(messages), step, nil, post_checkpoint)
+        replay_events_onto(normalize_messages(messages), step, nil, [], post_checkpoint)
 
       nil ->
-        replay_events_onto(initial_messages, 0, nil, events)
+        replay_events_onto(initial_messages, 0, nil, [], events)
     end
   end
 
-  defp replay_events_onto(messages, step, pending_ask, events) do
-    Enum.reduce(events, {messages, step, pending_ask}, fn event, {msgs, current_step, ask_state} ->
-      case event.event_type do
-        "llm_response" ->
-          content = event.payload["content"]
-          {msgs ++ [%{role: "assistant", content: content}], event.payload["step"] || current_step, nil}
+  defp replay_events_onto(messages, step, pending_ask, pending_tool_calls, events) do
+    {msgs, current_step, ask_state, pending_calls} =
+      Enum.reduce(events, {messages, step, pending_ask, pending_tool_calls}, fn event,
+                                                                                {msgs, current_step, ask_state,
+                                                                                 pending_calls} ->
+        case event.event_type do
+          "llm_response" ->
+            content = event.payload["content"]
+            tool_calls = Enum.filter(content, &(&1["type"] == "tool_use"))
+            {msgs ++ [%{role: "assistant", content: content}], event.payload["step"] || current_step, nil, tool_calls}
 
-        "tool_result" ->
-          tool_result = %{
-            "type" => "tool_result",
-            "tool_use_id" => event.payload["tool_use_id"],
-            "content" => event.payload["content"]
-          }
+          "tool_result" ->
+            tool_result = %{
+              "type" => "tool_result",
+              "tool_use_id" => event.payload["tool_use_id"],
+              "content" => event.payload["content"]
+            }
 
-          tool_result =
-            if event.payload["is_error"] do
-              Map.put(tool_result, "is_error", true)
-            else
-              tool_result
+            tool_result =
+              if event.payload["is_error"] do
+                Map.put(tool_result, "is_error", true)
+              else
+                tool_result
+              end
+
+            case List.last(msgs) do
+              %{role: "user", content: content} when is_list(content) ->
+                updated = List.replace_at(msgs, -1, %{role: "user", content: content ++ [tool_result]})
+                {updated, current_step, ask_state, remove_pending_tool_call(pending_calls, event.payload["tool_use_id"])}
+
+              _ ->
+                {msgs ++ [%{role: "user", content: [tool_result]}], current_step, ask_state,
+                 remove_pending_tool_call(pending_calls, event.payload["tool_use_id"])}
             end
 
-          case List.last(msgs) do
-            %{role: "user", content: content} when is_list(content) ->
-              updated = List.replace_at(msgs, -1, %{role: "user", content: content ++ [tool_result]})
-              {updated, current_step, ask_state}
+          "waiting_for_user" ->
+            pending_ask = %{
+              tool_use_id: event.payload["tool_use_id"],
+              question: event.payload["question"],
+              other_results: []
+            }
 
-            _ ->
-              {msgs ++ [%{role: "user", content: [tool_result]}], current_step, ask_state}
-          end
+            {msgs, current_step, pending_ask, pending_calls}
 
-        "waiting_for_user" ->
-          pending_ask = %{
-            tool_use_id: event.payload["tool_use_id"],
-            question: event.payload["question"],
-            other_results: []
-          }
+          "user_response" ->
+            {msgs, current_step, nil, remove_pending_tool_call(pending_calls, event.payload["tool_use_id"])}
 
-          {msgs, current_step, pending_ask}
+          type when type in ["checkpoint_saved", "checkpoint"] ->
+            {normalize_messages(event.payload["messages"]), event.payload["step"], nil, []}
 
-        "user_response" ->
-          {msgs, current_step, nil}
+          _ ->
+            {msgs, current_step, ask_state, pending_calls}
+        end
+      end)
 
-        "checkpoint" ->
-          {normalize_messages(event.payload["messages"]), event.payload["step"], nil}
-
-        _ ->
-          {msgs, current_step, ask_state}
+    resume_action =
+      cond do
+        ask_state -> nil
+        pending_calls != [] -> {:resume_tools, pending_calls}
+        true -> :llm_loop
       end
-    end)
+
+    {msgs, current_step, ask_state, resume_action}
+  end
+
+  defp remove_pending_tool_call(pending_calls, tool_use_id) do
+    Enum.reject(pending_calls, fn block -> block["id"] == tool_use_id end)
+  end
+
+  defp append(run, {:ok, event}), do: Runs.append_event(run, event)
+  defp append(_run, {:error, reason}), do: {:error, reason}
+
+  defp maybe_invoke_test_hook(%{test_pid: nil}, _hook, _payload), do: :ok
+
+  defp maybe_invoke_test_hook(%{test_pid: test_pid}, hook, payload) do
+    send(test_pid, {:runtime_hook, hook, payload})
+
+    receive do
+      {:runtime_hook_reply, ^hook, :crash} -> exit({:test_crash, hook})
+    after
+      0 -> :ok
+    end
   end
 end

@@ -6,6 +6,8 @@ defmodule Norns.Runs do
   import Ecto.Query
 
   alias Norns.Repo
+  alias Norns.Runtime.Event
+  alias Norns.Runtime.EventValidator
   alias Norns.Runs.{Run, RunEvent}
 
   def get_run(id), do: Repo.get(Run, id) |> Repo.preload(:conversation)
@@ -31,21 +33,22 @@ defmodule Norns.Runs do
   end
 
   def append_event(%Run{} = run, attrs) do
-    Repo.transaction(fn ->
-      sequence = next_sequence(run.id)
+    with {:ok, normalized} <- normalize_event(attrs) do
+      Repo.transaction(fn ->
+        sequence = next_sequence(run.id)
 
-      params =
-        attrs
-        |> Map.new()
-        |> Map.put(:run_id, run.id)
-        |> Map.put(:tenant_id, run.tenant_id)
-        |> Map.put(:sequence, sequence)
+        params =
+          normalized
+          |> Map.put(:run_id, run.id)
+          |> Map.put(:tenant_id, run.tenant_id)
+          |> Map.put(:sequence, sequence)
 
-      case %RunEvent{} |> RunEvent.changeset(params) |> Repo.insert() do
-        {:ok, event} -> event
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
-    end)
+        case %RunEvent{} |> RunEvent.changeset(params) |> Repo.insert() do
+          {:ok, event} -> event
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+    end
   end
 
   def list_events(run_id) do
@@ -65,4 +68,7 @@ defmodule Norns.Runs do
       n -> n + 1
     end
   end
+
+  defp normalize_event(%Event{} = event), do: EventValidator.validate(event)
+  defp normalize_event(attrs) when is_map(attrs), do: EventValidator.validate(attrs)
 end

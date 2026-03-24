@@ -7,6 +7,7 @@ defmodule Norns.Runs.Run do
     field :trigger_type, :string
     field :input, :map, default: %{}
     field :output, :string
+    field :failure_metadata, :map, default: %{}
 
     belongs_to :tenant, Norns.Tenants.Tenant
     belongs_to :agent, Norns.Agents.Agent
@@ -18,7 +19,7 @@ defmodule Norns.Runs.Run do
 
   def changeset(run, attrs) do
     run
-    |> cast(attrs, [:tenant_id, :agent_id, :conversation_id, :status, :trigger_type, :input, :output])
+    |> cast(attrs, [:tenant_id, :agent_id, :conversation_id, :status, :trigger_type, :input, :output, :failure_metadata])
     |> validate_required([:tenant_id, :agent_id, :status, :trigger_type])
     |> validate_inclusion(:status, ["pending", "running", "waiting", "completed", "failed"])
     |> foreign_key_constraint(:agent_id)

@@ -107,8 +107,12 @@ defmodule NornsWeb.RunLive do
   defp event_type_color("llm_response"), do: "text-blue-400"
   defp event_type_color("tool_call"), do: "text-yellow-400"
   defp event_type_color("tool_result"), do: "text-yellow-300"
+  defp event_type_color("checkpoint_saved"), do: "text-gray-500"
   defp event_type_color("checkpoint"), do: "text-gray-500"
   defp event_type_color("retry"), do: "text-orange-400"
+  defp event_type_color("run_completed"), do: "text-green-400"
+  defp event_type_color("run_failed"), do: "text-red-400"
+  defp event_type_color("run_started"), do: "text-gray-400"
   defp event_type_color("agent_completed"), do: "text-green-400"
   defp event_type_color("agent_error"), do: "text-red-400"
   defp event_type_color("waiting_for_user"), do: "text-yellow-400"
@@ -119,8 +123,10 @@ defmodule NornsWeb.RunLive do
   defp event_summary(%{event_type: "llm_response", payload: %{"stop_reason" => sr}}), do: sr
   defp event_summary(%{event_type: "tool_call", payload: %{"name" => name}}), do: name
   defp event_summary(%{event_type: "tool_result", payload: %{"tool_use_id" => id}}), do: id
+  defp event_summary(%{event_type: "checkpoint_saved", payload: %{"step" => s}}), do: "step #{s}"
   defp event_summary(%{event_type: "checkpoint", payload: %{"step" => s}}), do: "step #{s}"
   defp event_summary(%{event_type: "retry", payload: %{"attempt" => a}}), do: "attempt #{a}"
+  defp event_summary(%{event_type: "run_failed", payload: %{"error" => e}}), do: String.slice(e, 0, 60)
   defp event_summary(%{event_type: "agent_error", payload: %{"error" => e}}), do: String.slice(e, 0, 60)
   defp event_summary(%{event_type: "waiting_for_user", payload: %{"question" => q}}), do: String.slice(q, 0, 80)
   defp event_summary(%{event_type: "user_response", payload: %{"content" => c}}), do: String.slice(c, 0, 80)
@@ -129,6 +135,7 @@ defmodule NornsWeb.RunLive do
   defp event_detail(%{event_type: "tool_call", payload: %{"input" => input}}), do: inspect(input, pretty: true, limit: 200)
   defp event_detail(%{event_type: "tool_result", payload: %{"content" => c}}) when is_binary(c), do: String.slice(c, 0, 200)
   defp event_detail(%{event_type: "llm_response", payload: %{"usage" => %{"input_tokens" => i, "output_tokens" => o}}}), do: "#{i} in / #{o} out tokens"
+  defp event_detail(%{event_type: "run_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 200)
   defp event_detail(%{event_type: "agent_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 200)
   defp event_detail(%{event_type: "waiting_for_user", payload: %{"question" => q}}), do: q
   defp event_detail(%{event_type: "user_response", payload: %{"content" => c}}), do: c
