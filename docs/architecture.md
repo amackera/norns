@@ -24,6 +24,9 @@ Each agent is a GenServer managed by a DynamicSupervisor, configured by an `Agen
 %AgentDef{
   model: "claude-sonnet-4-20250514",
   system_prompt: "You are a research assistant...",
+  mode: :conversation,
+  context_strategy: :sliding_window,
+  context_window: 20,
   tools: [MyTools.WebSearch, MyTools.WriteDoc],
   checkpoint_policy: :on_tool_call,
   max_steps: 50,
@@ -38,6 +41,42 @@ receive message → call LLM → if tool call, execute tool → checkpoint → r
 ```
 
 State is persisted to Postgres at each checkpoint as an event log. On restart, the process replays events rather than re-executing LLM calls.
+
+## Agent Modes
+
+### Task Mode (default)
+Each `send_message` starts a fresh run. No conversation history between runs. Good for one-shot queries and fire-and-forget tasks.
+
+### Conversation Mode
+Messages append to a persistent conversation. The LLM sees full history from previous runs. Conversations are identified by an external key (e.g., Slack channel ID) so one agent can handle multiple concurrent conversations.
+
+Registry key: `{tenant_id, agent_id, conversation_key}` — a product expert bot tagged in #engineering, #support, and a DM simultaneously gets three independent GenServer processes with separate conversation state.
+
+Context management prevents unbounded token growth:
+- **Sliding window** (default): keep the last N messages, discard older ones
+- Conversation summary (if present) prepended to the system prompt for historical context
+
+## Agent Memory
+
+Agents have persistent key-value memory shared across all conversations. When the agent learns something in #engineering, it can recall it in #product.
+
+Backed by the `memories` table scoped to `agent_id`. Two built-in tools:
+- **`store_memory`** — the agent decides what's worth remembering (upserts by key)
+- **`search_memory`** — keyword search across memory keys and content
+
+The LLM decides what to store and when to search — this mirrors how humans take notes.
+
+## Human-in-the-Loop
+
+The `ask_user` tool enables interrupt/resume. When the LLM needs clarification:
+
+1. LLM returns `tool_use` calling `ask_user` with a question
+2. Agent logs the question, sets run status to `"waiting"`, broadcasts via PubSub
+3. Agent process parks itself — no more LLM calls until the user responds
+4. User sends a response via API/UI/WebSocket
+5. Response is delivered as a `tool_result`, agent resumes the LLM loop
+
+Fully durable: if the process crashes while waiting, it resumes to waiting state from the event log.
 
 ## Process Model (Temporal-style Workers)
 
@@ -61,30 +100,33 @@ Norns Runtime (BEAM)                     User's Infrastructure
 ```
 
 Key properties:
-- **Workers make outbound connections only** — works behind firewalls/NATs, no public endpoints needed
+- **Workers make outbound connections only** — works behind firewalls/NATs
 - **Norns never touches user data** — it orchestrates; workers execute
-- **If a worker disconnects**, TaskQueue holds pending tasks and resumes when it reconnects
-- **Self-hosted mode**: worker and runtime share the same BEAM VM, tool calls are local function calls with no network hop
-
-### Worker Protocol
-
-Workers connect to `/worker` WebSocket, authenticated via tenant API key.
-
-| Direction | Event | Payload |
-|-----------|-------|---------|
-| Worker → Server | join `"worker:lobby"` | `{worker_id, tools: [{name, description, input_schema}]}` |
-| Server → Worker | push `"tool_task"` | `{task_id, tool_name, input, agent_id, run_id}` |
-| Worker → Server | `"tool_result"` | `{task_id, status: "ok"/"error", result/error}` |
-
-`WorkerRegistry` (GenServer) tracks connected workers, dispatches tasks, routes results. `TaskQueue` (GenServer) holds tasks when no worker is available, flushes on reconnect, sweeps stale tasks with timeout.
+- **If a worker disconnects**, TaskQueue holds pending tasks and flushes on reconnect
+- **Self-hosted mode**: worker and runtime share the same BEAM VM, tool calls are local function calls
 
 ## Tool System
 
 From the agent's perspective, all tools look identical. The `Executor` transparently handles both local and remote tools.
 
-### Tool Definition
+### Built-in Tools
 
-Tools are modules implementing `Norns.Tools.Behaviour`:
+| Tool | Description |
+|------|-------------|
+| `web_search` | DuckDuckGo search, returns top 5 results with titles/URLs/snippets |
+| `http_request` | GET/POST via Req, HTML stripped to text, body truncated |
+| `shell` | Execute allowlisted shell commands with timeout |
+| `ask_user` | Pause agent, surface question, wait for human response |
+| `store_memory` | Save a fact to persistent agent memory (upsert by key) |
+| `search_memory` | Keyword search across agent memory |
+
+### Three Sources of Tools
+
+1. **Built-in tools** — ship with norns, registered in `Tools.Registry` (ETS) on boot
+2. **User-defined tools** — registered via workers over WebSocket. Tracked in `WorkerRegistry`. Represented as `%Tool{source: {:remote, tenant_id}}`
+3. **MCP tools** (future) — norns connects to external MCP servers as a client
+
+### Tool Definition
 
 ```elixir
 defmodule MyTools.LookupCustomer do
@@ -100,18 +142,6 @@ defmodule MyTools.LookupCustomer do
 end
 ```
 
-### Three Sources of Tools
-
-1. **Built-in tools** — ship with norns, registered in `Tools.Registry` (ETS) on boot. Currently: WebSearch (stub).
-2. **User-defined tools** — registered via workers over WebSocket. Tracked in `WorkerRegistry`. Represented as `%Tool{source: {:remote, tenant_id}}`.
-3. **MCP tools** (future) — norns connects to external MCP servers as a client, discovers tools automatically.
-
-### Execution Path
-
-`Tools.Executor.execute/2` checks the tool's `source` field:
-- `:local` → calls the handler function directly
-- `{:remote, tenant_id}` → dispatches via `WorkerRegistry`, blocks on `await_result/2`
-
 ## API Surface
 
 ### REST API (`/api/v1`)
@@ -119,59 +149,60 @@ end
 Authenticated via `Authorization: Bearer <token>` matched against tenant `api_keys`.
 
 ```
-POST   /api/v1/agents              — create agent
-GET    /api/v1/agents              — list agents
-GET    /api/v1/agents/:id          — show agent
-POST   /api/v1/agents/:id/start   — spawn GenServer
-DELETE /api/v1/agents/:id/stop    — stop GenServer
-GET    /api/v1/agents/:id/status  — process state
-POST   /api/v1/agents/:id/messages — send message (202)
-GET    /api/v1/agents/:id/runs    — run history
-GET    /api/v1/runs/:id           — run details
-GET    /api/v1/runs/:id/events    — event log
+POST   /api/v1/agents                         — create agent
+GET    /api/v1/agents                         — list agents
+GET    /api/v1/agents/:id                     — show agent
+POST   /api/v1/agents/:id/start              — spawn GenServer
+DELETE /api/v1/agents/:id/stop               — stop GenServer
+GET    /api/v1/agents/:id/status             — process state
+POST   /api/v1/agents/:id/messages           — send message (auto-starts, optional conversation_key)
+GET    /api/v1/agents/:id/runs               — run history
+GET    /api/v1/agents/:id/conversations      — list conversations
+GET    /api/v1/agents/:id/conversations/:key — show conversation
+DELETE /api/v1/agents/:id/conversations/:key — delete conversation
+GET    /api/v1/runs/:id                      — run details
+GET    /api/v1/runs/:id/events               — event log
 ```
 
 ### WebSocket Channels
 
-Two socket endpoints:
+Three socket endpoints:
 
-- **`/socket`** (AgentSocket) — clients join `"agent:<id>"` to receive real-time agent events (llm_response, tool_call, tool_result, completed, error). Can also send messages via channel.
-- **`/worker`** (WorkerSocket) — workers join `"worker:lobby"` with tool registrations, receive `tool_task` pushes, send `tool_result` replies.
+- **`/socket`** (AgentSocket) — clients join `"agent:<id>"` for real-time events. Can also send messages.
+- **`/worker`** (WorkerSocket) — workers join `"worker:lobby"` with tool registrations
+- **`/live`** (LiveView) — dashboard WebSocket
 
-PubSub connects agent processes to channels. Agent processes publish events, channels subscribe and forward.
+### LiveView Dashboard
+
+- `/` — agents list with live status badges, create agent form
+- `/agents/:id` — agent detail, message input, live event stream, run history
+- `/runs/:id` — run timeline with color-coded events
+- `/tools` — built-in and worker-provided tools
+- `/setup` — tenant creation (first visit)
 
 ## Data Model
 
 Event-sourced persistence in Postgres via Ecto.
 
-Core tables:
-- `tenants` — name, slug, api_keys (multi-tenancy enforced at schema level)
-- `agents` — name, purpose, system_prompt, model, model_config, tools_config, max_steps, status
-- `runs` — status, trigger_type, input, output, agent_id, tenant_id
-- `run_events` — sequence, event_type, payload, source, metadata, run_id, tenant_id
+```
+tenants        — name, slug, api_keys
+agents         — name, purpose, system_prompt, model, model_config, max_steps, status
+conversations  — agent_id, key, messages (jsonb), summary, message_count, token_estimate
+memories       — agent_id, key (unique per agent), content, metadata
+runs           — status, trigger_type, input, output, agent_id, conversation_id
+run_events     — sequence, event_type, payload, source, metadata, run_id
+```
 
-Event types: `agent_started`, `llm_request`, `llm_response`, `tool_call`, `tool_result`, `checkpoint`, `retry`, `agent_completed`, `agent_error`
-
-On restart: find last checkpoint event, replay events since that checkpoint.
-
-## Agent Configuration
-
-`AgentDef` struct configures agent behavior:
-
-- **`checkpoint_policy`**: `:every_step` (after every LLM call), `:on_tool_call` (after tool execution, default), `:manual` (no automatic checkpoints)
-- **`on_failure`**: `:stop` (default, mark run as failed) or `:retry_last_step` (exponential backoff, max 3 retries)
-- **`max_steps`**: safety limit on LLM-tool loop iterations (default 50)
-
-`AgentDef.from_agent/2` builds from an Agent schema record. Checkpoint and failure policies read from `model_config` map.
+Event types: `agent_started`, `llm_request`, `llm_response`, `tool_call`, `tool_result`, `checkpoint`, `retry`, `waiting_for_user`, `user_response`, `agent_completed`, `agent_error`
 
 ## Crash Recovery
 
-State reconstruction from the event log:
 1. Find the last `checkpoint` event (full message snapshot)
 2. Replay events after the checkpoint to rebuild message history
-3. Resume the LLM-tool loop from where it left off
+3. For conversation mode: load persisted conversation as the base, then replay run events on top
+4. Resume the LLM-tool loop from where it left off (or resume to waiting state if interrupted)
 
-On boot, `Workers.ResumeAgents` finds runs with status "running" and no live process, and resumes them.
+On boot, `Workers.ResumeAgents` finds runs with status `"running"` and no live process, and resumes them with the correct conversation key.
 
 ## Supervision Tree
 
@@ -180,16 +211,16 @@ Norns.Supervisor (one_for_one)
 ├── Norns.Repo (Ecto/PostgreSQL)
 ├── Oban (background jobs)
 ├── Phoenix.PubSub (Norns.PubSub)
-├── Registry (Norns.AgentRegistry, unique keys)
+├── Registry (Norns.AgentRegistry, keys: {tenant_id, agent_id, conversation_key})
 ├── DynamicSupervisor (Norns.AgentSupervisor)
-│   └── [Agents.Process] (spawned dynamically per agent)
+│   └── [Agents.Process] (one per agent conversation)
 ├── Workers.WorkerRegistry (tracks connected workers)
 ├── Workers.TaskQueue (pending tasks for disconnected workers)
 ├── NornsWeb.Telemetry
-└── NornsWeb.Endpoint (Phoenix — REST + WebSocket)
+└── NornsWeb.Endpoint (Phoenix — REST + WebSocket + LiveView)
 ```
 
-On boot: init tool registry, register built-in tools, resume orphaned runs.
+On boot: init tool registry, register built-in tools (including memory tools), resume orphaned runs.
 
 ## Build Phases
 
@@ -197,33 +228,37 @@ On boot: init tool registry, register built-in tools, resume orphaned runs.
 Durable agent GenServer, event-sourced persistence, crash recovery, orphan recovery.
 
 ### Phase 2: API + Transport ✓
-Phoenix REST API for lifecycle management. WebSocket channels for real-time streaming. Bearer token auth.
+Phoenix REST API, WebSocket channels, bearer token auth.
 
-### Phase 3: Generic Agent Definitions ✓
-`AgentDef` struct with configurable checkpoint policies and failure recovery. Module-based tool definitions via `use Norns.Tools.Behaviour`. ETS-backed tool registry.
+### Phase 3: Agent Definitions ✓
+AgentDef struct, module-based tools, tool registry, checkpoint policies, failure recovery with retry.
 
 ### Phase 4: Worker Protocol ✓
-Worker WebSocket at `/worker`. Tool registration on join. Task dispatch and result collection via `WorkerRegistry`. `TaskQueue` for pending tasks. Reconnection handling.
+Worker WebSocket, tool registration, task dispatch, TaskQueue for disconnected workers.
 
-### Phase 5: TypeScript/Python SDKs
-Developers define agents and tools in their language, SDK talks to Norns runtime over the API. BEAM is the engine, not the interface.
+### Phase 5: Conversations + Memory ✓
+Task vs conversation mode, sliding window context, persistent agent memory, `ask_user` interrupt/resume.
+
+### Phase 6: Dashboard ✓
+LiveView UI, tenant setup, agent creation, live event streaming, run timeline.
+
+### Phase 7: SDKs
+TypeScript/Python clients for defining agents and tools in other languages.
 
 ### Skip For Now
-- Multi-node clustering
+- Multi-node clustering (port Registry to Horde)
 - MCP tool integration
-- Agent builder / chat UI
-- Dashboard / observability UI
-- Auth, teams, billing
 - LLM streaming
+- Vector memory (pgvector)
 
 ## Business Model
 
-- **Norns Runtime** (open source, MIT) — the durable agent execution engine
+- **Norns Runtime** (open source, MIT) — self-hosted durable agent framework
 - **Norns SDKs** (open source, MIT) — define agents in TypeScript/Python
-- **Norns Cloud** (hosted, paid) — managed runtime, dashboard, observability, team features
+- **Norns Cloud** (hosted, paid) — managed runtime, dashboard, observability
+
+Self-hosted first. The framework builds trust and adoption. The cloud offering monetizes convenience.
 
 ## Integrations
 
-Norns is complementary to real-time media platforms like LiveKit. Norns owns the reasoning/durability plane; LiveKit owns the audio/video plane. A LiveKit agent worker acts as a thin voice I/O adapter that forwards transcripts to a Norns agent and streams responses back through TTS. The Norns agent maintains full context across calls, disconnections, and multi-hour waits.
-
-Same pattern applies to other transports: Slack adapter, Twilio SMS adapter, web chat — all pointing at the same durable agent process.
+Norns is complementary to real-time media platforms like LiveKit. Norns owns the reasoning/durability plane; LiveKit owns the audio/video plane. Same pattern applies to Slack, Twilio, web chat — thin transport adapters pointing at the same durable agent process.

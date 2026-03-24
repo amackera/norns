@@ -28,20 +28,25 @@ docker compose up -d
 docker compose run --rm -e POSTGRES_HOST=db app mix ecto.create
 docker compose run --rm -e POSTGRES_HOST=db app mix ecto.migrate
 
-# Run the durability demo (no API key needed)
-docker compose run --rm -e POSTGRES_HOST=db app mix demo.durability
-
-# Run a real agent with a real LLM (requires ANTHROPIC_API_KEY)
-docker compose run --rm -e POSTGRES_HOST=db -e ANTHROPIC_API_KEY=sk-ant-... app \
-  mix demo.agent "What are the main features of Elixir 1.18?"
+# Start the web UI
+docker compose run --rm -e POSTGRES_HOST=db -p 4000:4000 app mix phx.server
 ```
 
-`demo.durability` uses a fake LLM to show crash recovery. `demo.agent` uses a real LLM with real tool calls — you can watch it fetch web pages and synthesize an answer.
+Open `http://localhost:4000` — you'll be guided through creating your first tenant and API key.
+
+### Demos
+
+```bash
+# Durability demo: crash an agent mid-task, watch it recover (no API key needed)
+docker compose run --rm -e POSTGRES_HOST=db app mix demo.durability
+
+# Live agent: real LLM + real tool calls (requires ANTHROPIC_API_KEY in .env)
+docker compose run --rm -e POSTGRES_HOST=db app mix demo.agent "What are the main features of Elixir 1.18?"
+```
 
 The durability demo creates an agent, sends it a multi-step research query, kills the process mid-task, then resumes from the event log and completes:
 
 ```
->> Starting agent and sending query...
 >> Agent is working (LLM → tool call → LLM → tool call)...
    Events logged before crash: 10
 
@@ -66,20 +71,28 @@ receive message → call LLM → if tool call, execute tool → checkpoint → r
 
 State is persisted to Postgres as an append-only event log. On crash, the process replays events from the last checkpoint rather than re-executing LLM calls.
 
-### Agent Definition
+### Agent Modes
 
-Agents are configured with an `AgentDef`:
+Agents run in one of two modes:
+
+- **Task mode** (default) — each message starts a fresh run. No memory between runs. Good for one-shot queries.
+- **Conversation mode** — messages append to a persistent conversation. The agent maintains context across interactions, like a chat. Good for bots and ongoing interactions.
 
 ```elixir
 %Norns.Agents.AgentDef{
   model: "claude-sonnet-4-20250514",
   system_prompt: "You are a research assistant.",
+  mode: :conversation,               # :task | :conversation
+  context_strategy: :sliding_window,  # keeps last N messages
+  context_window: 20,
   tools: [Norns.Tools.Http.__tool__(), Norns.Tools.WebSearch.__tool__()],
-  checkpoint_policy: :on_tool_call,  # :every_step | :on_tool_call | :manual
+  checkpoint_policy: :on_tool_call,
   max_steps: 50,
-  on_failure: :retry_last_step       # :stop | :retry_last_step
+  on_failure: :retry_last_step
 }
 ```
+
+Conversation mode supports multiple concurrent conversations per agent — each identified by a key (e.g., a Slack channel ID). A product expert bot tagged in #engineering, #support, and a DM simultaneously maintains separate context for each.
 
 ### Defining Tools
 
@@ -112,52 +125,74 @@ end
 
 ### Built-in Tools
 
-- **`http_request`** — GET/POST requests via Req
-- **`web_search`** — web search (stub, returns placeholder results)
+- **`web_search`** — search via DuckDuckGo (real results, no API key needed)
+- **`http_request`** — GET/POST requests via Req (HTML stripped to text)
 - **`shell`** — execute allowlisted shell commands
+- **`ask_user`** — pause the agent and wait for human input (interrupt/resume)
+- **`store_memory`** — save a fact to persistent memory (shared across all conversations)
+- **`search_memory`** — search agent memory by keyword
+
+### Agent Memory
+
+Agents have persistent memory shared across all conversations. When the agent learns something in one conversation, it can recall it in another.
+
+```
+#engineering: "We shipped dark mode today for pro users"
+→ Agent calls store_memory(key: "dark-mode-launch", content: "...")
+
+#product (different conversation, hours later): "What launched recently?"
+→ Agent calls search_memory(query: "launched")
+→ Answers using knowledge from #engineering
+```
+
+## Web Dashboard
+
+LiveView dashboard at `http://localhost:4000`:
+
+- **Agents list** — status badges, start/stop, create new agents
+- **Agent detail** — system prompt, controls, message input, live event stream, run history
+- **Run detail** — full event timeline with color-coded events and payloads
+- **Tools** — built-in and worker-provided tools
+
+First visit redirects to `/setup` to create a tenant and generate an API key.
 
 ## REST API
 
 Authenticate with `Authorization: Bearer <token>` matching a tenant's API key.
 
 ```
-POST   /api/v1/agents              Create agent
-GET    /api/v1/agents              List agents
-GET    /api/v1/agents/:id          Show agent
-POST   /api/v1/agents/:id/start   Start agent process
-DELETE /api/v1/agents/:id/stop    Stop agent process
-GET    /api/v1/agents/:id/status  Get process state
-POST   /api/v1/agents/:id/messages Send message to agent
-GET    /api/v1/agents/:id/runs    List runs
-GET    /api/v1/runs/:id           Show run
-GET    /api/v1/runs/:id/events    Get event log
+POST   /api/v1/agents                         Create agent
+GET    /api/v1/agents                         List agents
+GET    /api/v1/agents/:id                     Show agent
+POST   /api/v1/agents/:id/start              Start agent process
+DELETE /api/v1/agents/:id/stop               Stop agent process
+GET    /api/v1/agents/:id/status             Get process state
+POST   /api/v1/agents/:id/messages           Send message (with optional conversation_key)
+GET    /api/v1/agents/:id/runs               List runs
+GET    /api/v1/agents/:id/conversations      List conversations
+GET    /api/v1/agents/:id/conversations/:key Show conversation
+DELETE /api/v1/agents/:id/conversations/:key Delete conversation
+GET    /api/v1/runs/:id                      Show run
+GET    /api/v1/runs/:id/events               Get event log
 ```
 
-### Example: Run an Agent via API
+### Example: Conversational Agent via API
 
 ```bash
-# Create an agent
+# Create a conversation-mode agent
 curl -X POST http://localhost:4000/api/v1/agents \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name": "researcher", "system_prompt": "You are a research assistant.", "status": "idle"}'
+  -d '{"name": "support-bot", "system_prompt": "You are a helpful support agent.", "status": "idle", "model_config": {"mode": "conversation"}}'
 
-# Start it
-curl -X POST http://localhost:4000/api/v1/agents/1/start \
-  -H "Authorization: Bearer $API_KEY"
-
-# Send a message
+# Send a message (auto-starts the agent)
 curl -X POST http://localhost:4000/api/v1/agents/1/messages \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"content": "Research the latest developments in Elixir"}'
+  -d '{"content": "I can not log in", "conversation_key": "slack:U01ABC"}'
 
-# Check status
-curl http://localhost:4000/api/v1/agents/1/status \
-  -H "Authorization: Bearer $API_KEY"
-
-# View the event log
-curl http://localhost:4000/api/v1/runs/1/events \
+# View the conversation
+curl http://localhost:4000/api/v1/agents/1/conversations/slack:U01ABC \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -167,7 +202,7 @@ Connect to `/socket` to receive real-time agent events:
 
 ```
 Topic: "agent:<agent_id>"
-Events: llm_response, tool_call, tool_result, completed, error
+Events: llm_response, tool_call, tool_result, waiting, completed, error
 ```
 
 Send messages via the channel with `{"event": "send_message", "payload": {"content": "..."}}`.
@@ -187,11 +222,7 @@ Norns Runtime                         Your Infrastructure
   │  checkpoints + continues              │
 ```
 
-Workers join `"worker:lobby"` with their tool definitions. When an agent needs a remote tool, the runtime pushes a `tool_task` to the worker and waits for the `tool_result`.
-
-If a worker disconnects, pending tasks are queued and flushed when it reconnects.
-
-In self-hosted mode, the worker runs in the same BEAM VM — tool calls are local function calls with no network hop.
+If a worker disconnects, pending tasks are queued and flushed when it reconnects. In self-hosted mode, the worker runs in the same BEAM VM — tool calls are local function calls with no network hop.
 
 ## Running Tests
 
@@ -206,15 +237,16 @@ Norns.Supervisor
 ├── Norns.Repo (PostgreSQL)
 ├── Oban (background jobs)
 ├── Phoenix.PubSub
-├── Registry (agent process lookup)
+├── Registry (agent process lookup by {tenant, agent, conversation_key})
 ├── DynamicSupervisor
-│   └── [Agents.Process] — one GenServer per running agent
+│   └── [Agents.Process] — one GenServer per agent conversation
 ├── WorkerRegistry — tracks connected workers and their tools
 ├── TaskQueue — holds tasks for disconnected workers
 └── NornsWeb.Endpoint
     ├── REST API (/api/v1)
     ├── Agent WebSocket (/socket)
-    └── Worker WebSocket (/worker)
+    ├── Worker WebSocket (/worker)
+    └── LiveView Dashboard (/)
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full design and [docs/decision-log.md](docs/decision-log.md) for why things are the way they are.
@@ -222,7 +254,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design and [docs/d
 ## Tech Stack
 
 - **Elixir** on BEAM/OTP
-- **Phoenix** (REST + Channels)
+- **Phoenix** (REST + Channels + LiveView)
 - **PostgreSQL** via Ecto
 - **Oban** for background jobs
 - **Anthropic** Messages API (swappable via behaviour)
