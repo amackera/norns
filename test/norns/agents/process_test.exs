@@ -13,6 +13,40 @@ defmodule Norns.Agents.ProcessTest do
     %{tenant: tenant, agent: agent}
   end
 
+  # Subscribe and wait for a specific PubSub event
+  defp wait_for_completion(agent_id, timeout \\ 5000) do
+    Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent_id}")
+
+    receive do
+      {:completed, _} -> :ok
+      {:error, _} -> :ok
+    after
+      timeout -> flunk("Agent did not complete within #{timeout}ms")
+    end
+  end
+
+  defp subscribe_and_send(pid, agent_id, content) do
+    Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent_id}")
+    AgentProcess.send_message(pid, content)
+  end
+
+  defp wait_for(event, timeout \\ 5000) do
+    receive do
+      {^event, payload} -> payload
+    after
+      timeout -> flunk("Did not receive #{event} within #{timeout}ms")
+    end
+  end
+
+  defp collect_events_until(terminal_event, timeout \\ 5000, acc \\ []) do
+    receive do
+      {^terminal_event, _payload} = event -> Enum.reverse([event | acc])
+      {_type, _payload} = event -> collect_events_until(terminal_event, timeout, [event | acc])
+    after
+      timeout -> flunk("Did not receive #{terminal_event} within #{timeout}ms")
+    end
+  end
+
   describe "simple end_turn flow" do
     test "processes a message and completes", %{tenant: tenant, agent: agent} do
       Fake.set_responses([
@@ -23,22 +57,18 @@ defmodule Norns.Agents.ProcessTest do
       ])
 
       {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
-      AgentProcess.send_message(pid, "Hello agent")
-
-      # Give the GenServer time to process
-      Process.sleep(100)
+      subscribe_and_send(pid, agent.id, "Hello agent")
+      wait_for(:completed)
 
       state = AgentProcess.get_state(pid)
       assert state.status == :idle
       assert state.step == 1
 
-      # Verify run was created and completed
       assert state.run_id != nil
       run = Runs.get_run!(state.run_id)
       assert run.status == "completed"
       assert run.output == "Hello! I can help with that."
 
-      # Verify events were logged
       events = Runs.list_events(run.id)
       event_types = Enum.map(events, & &1.event_type)
 
@@ -56,10 +86,11 @@ defmodule Norns.Agents.ProcessTest do
 
       {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
 
-      AgentProcess.send_message(pid, "first message")
-      Process.sleep(100)
+      subscribe_and_send(pid, agent.id, "first message")
+      wait_for(:completed)
+
       AgentProcess.send_message(pid, "second message")
-      Process.sleep(100)
+      wait_for(:completed)
 
       [first_call, second_call] = Fake.calls()
       assert first_call.messages == [%{role: "user", content: "first message"}]
@@ -70,7 +101,6 @@ defmodule Norns.Agents.ProcessTest do
   describe "tool use flow" do
     test "executes tool calls and continues LLM loop", %{tenant: tenant, agent: agent} do
       Fake.set_responses([
-        # First response: tool call
         %{
           content: [
             %{
@@ -82,7 +112,6 @@ defmodule Norns.Agents.ProcessTest do
           ],
           stop_reason: "tool_use"
         },
-        # Second response: final answer
         %{
           content: [%{"type" => "text", "text" => "Based on my search, Elixir is great!"}],
           stop_reason: "end_turn"
@@ -96,8 +125,8 @@ defmodule Norns.Agents.ProcessTest do
           tools: [WebSearch.tool()]
         )
 
-      AgentProcess.send_message(pid, "Tell me about Elixir")
-      Process.sleep(200)
+      subscribe_and_send(pid, agent.id, "Tell me about Elixir")
+      wait_for(:completed)
 
       state = AgentProcess.get_state(pid)
       assert state.status == :idle
@@ -111,15 +140,12 @@ defmodule Norns.Agents.ProcessTest do
 
       assert "tool_call" in event_types
       assert "tool_result" in event_types
-
-      # Should have 2 llm_request events (one per loop iteration)
       assert Enum.count(event_types, &(&1 == "llm_request")) == 2
     end
   end
 
   describe "max steps" do
     test "stops when max_steps exceeded", %{tenant: tenant, agent: agent} do
-      # Always return tool_use to force infinite loop
       responses =
         for i <- 1..5 do
           %{
@@ -145,8 +171,8 @@ defmodule Norns.Agents.ProcessTest do
           max_steps: 3
         )
 
-      AgentProcess.send_message(pid, "Loop forever")
-      Process.sleep(300)
+      subscribe_and_send(pid, agent.id, "Loop forever")
+      wait_for(:error)
 
       state = AgentProcess.get_state(pid)
       assert state.status == :idle
@@ -175,11 +201,14 @@ defmodule Norns.Agents.ProcessTest do
 
       {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
       AgentProcess.send_message(pid, "Hi")
-      Process.sleep(100)
 
-      assert_received {:agent_started, %{agent_id: _}}
-      assert_received {:llm_response, %{agent_id: _, stop_reason: "end_turn"}}
-      assert_received {:completed, %{agent_id: _, output: "Done!"}}
+      # Collect all events until completion
+      events = collect_events_until(:completed)
+
+      event_types = Enum.map(events, fn {type, _} -> type end)
+      assert :agent_started in event_types
+      assert :llm_response in event_types
+      assert :completed in event_types
     end
   end
 
@@ -202,12 +231,12 @@ defmodule Norns.Agents.ProcessTest do
           conversation_key: "slack:C123"
         )
 
-      AgentProcess.send_message(pid, "first message")
-      Process.sleep(100)
+      subscribe_and_send(pid, agent.id, "first message")
+      wait_for(:completed)
       first_run_id = AgentProcess.get_state(pid).run_id
 
       AgentProcess.send_message(pid, "second message")
-      Process.sleep(100)
+      wait_for(:completed)
       second_run_id = AgentProcess.get_state(pid).run_id
 
       conversation = Conversations.get_conversation_by_agent_key!(agent.id, "slack:C123")

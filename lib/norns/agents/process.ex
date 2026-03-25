@@ -11,9 +11,10 @@ defmodule Norns.Agents.Process do
 
   require Logger
 
-  alias Norns.{Agents, Conversations, LLM, Runs, Tenants}
+  alias Norns.{Agents, Conversations, Runs, Tenants}
   alias Norns.Agents.AgentDef
   alias Norns.Runtime.{ErrorPolicy, Errors, Events}
+  alias Norns.Workers.WorkerRegistry
   alias Norns.Tools.{Executor, Idempotency, Tool}
   @tool_result_cap 200
 
@@ -73,6 +74,7 @@ defmodule Norns.Agents.Process do
       run: nil,
       status: :idle,
       pending_ask: nil,
+      pending_llm_task: nil,
       resume_action: nil,
       test_pid: Keyword.get(opts, :test_pid)
     }
@@ -164,7 +166,7 @@ defmodule Norns.Agents.Process do
       append(state.run, Events.llm_request(%{"step" => state.step, "message_count" => length(state.messages)}))
 
       api_tools = Enum.map(state.agent_def.tools, &Tool.to_api_format/1)
-      opts = if api_tools == [], do: [], else: [tools: api_tools]
+      llm_opts = if api_tools == [], do: [], else: [tools: api_tools]
 
       messages_for_llm =
         state
@@ -173,14 +175,21 @@ defmodule Norns.Agents.Process do
 
       system_prompt = build_system_prompt(state)
 
-      case LLM.chat(state.api_key, state.agent_def.model, system_prompt, messages_for_llm, opts) do
-        {:ok, response} ->
-          state = %{state | retry_count: 0}
-          handle_llm_response(state, response)
+      # Dispatch LLM call to worker — non-blocking
+      llm_task = %{
+        api_key: state.api_key,
+        model: state.agent_def.model,
+        system_prompt: system_prompt,
+        messages: messages_for_llm,
+        opts: llm_opts,
+        agent_id: state.agent_id,
+        run_id: state.run.id,
+        step: state.step
+      }
 
-        {:error, reason} ->
-          handle_llm_error(state, reason)
-      end
+      {:ok, task_id} = WorkerRegistry.dispatch_llm_task(state.tenant_id, llm_task, from_pid: self())
+
+      {:noreply, %{state | status: :awaiting_llm, pending_llm_task: task_id}}
     end
   end
 
@@ -332,12 +341,38 @@ defmodule Norns.Agents.Process do
   end
 
   @impl true
+  def handle_info({:task_result, task_id, result}, %{status: :awaiting_llm, pending_llm_task: task_id} = state) do
+    state = %{state | status: :running, pending_llm_task: nil}
+
+    case result do
+      {:ok, %{"content" => content, "stop_reason" => stop_reason, "usage" => usage}} ->
+        response = %{
+          content: content,
+          stop_reason: stop_reason,
+          usage: %{
+            input_tokens: usage["input_tokens"] || 0,
+            output_tokens: usage["output_tokens"] || 0
+          }
+        }
+
+        state = %{state | retry_count: 0}
+        handle_llm_response(state, response)
+
+      {:error, reason} ->
+        handle_llm_error(state, reason)
+    end
+  end
+
   def handle_info(:retry_llm, state) do
     {:noreply, state, {:continue, :llm_loop}}
   end
 
-  @impl true
   def handle_info({:runtime_hook_reply, _hook, _action}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info({:task_result, _task_id, _result}, state) do
+    # Stale task result — ignore
     {:noreply, state}
   end
 
