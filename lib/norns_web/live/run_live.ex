@@ -87,6 +87,13 @@ defmodule NornsWeb.RunLive do
           <%= if event = inspector["last_event"] do %>
             <div>Last event: <span class="text-white">#<%= event["sequence"] %> <%= event["event_type"] %></span></div>
           <% end %>
+          <%= if @run.input["user_message"] do %>
+            <div class="pt-2">
+              <button phx-click="retry" class="text-xs text-blue-400 hover:text-blue-300 border border-blue-900 px-3 py-1.5 rounded">
+                Retry with same message
+              </button>
+            </div>
+          <% end %>
         </div>
       </div>
     <% end %>
@@ -111,6 +118,25 @@ defmodule NornsWeb.RunLive do
       <% end %>
     </div>
     """
+  end
+
+  @impl true
+  def handle_event("retry", _params, socket) do
+    run = socket.assigns.run
+    tenant = socket.assigns.tenant
+    message = run.input["user_message"]
+
+    if message do
+      case Norns.Agents.Registry.send_message(tenant.id, run.agent_id, message) do
+        :ok ->
+          {:noreply, socket |> put_flash(:info, "Retrying: #{String.slice(message, 0, 60)}")}
+
+        {:error, _reason} ->
+          {:noreply, socket |> put_flash(:error, "Failed to retry")}
+      end
+    else
+      {:noreply, socket |> put_flash(:error, "No message to retry")}
+    end
   end
 
   @impl true
