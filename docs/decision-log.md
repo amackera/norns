@@ -1,8 +1,18 @@
 # Decision Log
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 
 ## Product Decisions
+
+### Scope reset (execution reliability first)
+- Norns is framed as a reliable execution layer, not a broad "agent OS".
+- Durable value focus:
+  1. correctness under failure
+  2. operator control
+  3. queryable execution state without re-inference
+- Transcript persistence is often sufficient for simple single-agent flows; Norns focuses on production execution guarantees.
+- Worker-hosted execution remains deferred (see `docs/plan-worker-hosted-execution.md`).
+- Broader framework/platform expansion is explicitly de-prioritized until reliability core is hardened.
 
 ### Durable agent runtime on BEAM
 - Norns is an open-source (MIT), self-hostable, agent-native durable runtime

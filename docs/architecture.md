@@ -2,7 +2,9 @@
 
 ## What Is This
 
-Norns is an open-source (MIT), Elixir/BEAM-based durable agent runtime. Developers define AI agents that survive crashes, restarts, and infrastructure failures by checkpointing every LLM call and tool execution. Think Temporal, but purpose-built for AI agents and running on the Erlang VM.
+Norns is an open-source (MIT), Elixir/BEAM-based durable agent runtime. Developers define AI agents that survive crashes, restarts, and infrastructure failures by checkpointing every LLM call and tool execution.
+
+Current scope is intentionally tight: Norns is a **reliable execution layer** (durability, retries, idempotency, inspectability), not a broad agent platform.
 
 ## Why BEAM
 
