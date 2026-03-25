@@ -10,6 +10,7 @@ defmodule Norns.Runtime.Events do
     RunFailed,
     RunStarted,
     ToolCall,
+    ToolDuplicate,
     ToolResult
   }
 
@@ -19,6 +20,7 @@ defmodule Norns.Runtime.Events do
   def llm_request(attrs), do: LlmRequest.new(attrs)
   def llm_response(attrs), do: LlmResponse.new(attrs)
   def tool_call(attrs), do: ToolCall.new(attrs)
+  def tool_duplicate(attrs), do: ToolDuplicate.new(attrs)
   def tool_result(attrs), do: ToolResult.new(attrs)
   def checkpoint_saved(attrs), do: CheckpointSaved.new(attrs)
   def run_failed(attrs), do: RunFailed.new(attrs)

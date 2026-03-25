@@ -14,6 +14,9 @@ defmodule Norns.Tools.StoreMemory do
   end
 
   @impl true
+  def side_effect?, do: true
+
+  @impl true
   def input_schema do
     %{
       "type" => "object",

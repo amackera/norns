@@ -1,5 +1,5 @@
 defmodule Norns.Tools.ExecutorTest do
-  use ExUnit.Case, async: true
+  use Norns.DataCase, async: false
 
   alias Norns.Tools.{Executor, Tool}
 
@@ -32,6 +32,26 @@ defmodule Norns.Tools.ExecutorTest do
       assert {:error, "Tool execution error: kaboom"} =
                Executor.execute(%{"name" => "boom", "input" => %{}}, [tool])
     end
+
+    test "adds idempotency context for side-effecting tools" do
+      tenant = create_tenant()
+      agent = create_agent(tenant)
+      {:ok, run} = Norns.Runs.create_run(%{tenant_id: tenant.id, agent_id: agent.id, trigger_type: "message", status: "running"})
+
+      tool = %Tool{
+        name: "side_effect",
+        description: "Records idempotency context",
+        input_schema: %{},
+        side_effect?: true,
+        handler: fn _ ->
+          context = Process.get(:norns_tool_context)
+          {:ok, context.idempotency_key}
+        end
+      }
+
+      assert {:ok, "run:#{run.id}:step:2:tool:call_1:name:side_effect", %{"idempotency_key" => "run:#{run.id}:step:2:tool:call_1:name:side_effect"}} =
+               Executor.execute(%{"id" => "call_1", "name" => "side_effect", "input" => %{}}, [tool], run: run, step: 2)
+    end
   end
 
   describe "execute_all/2" do
@@ -62,6 +82,45 @@ defmodule Norns.Tools.ExecutorTest do
       [result] = Executor.execute_all(blocks, [])
       assert result["is_error"] == true
       assert result["content"] =~ "Unknown tool"
+    end
+
+    test "reuses persisted result for duplicate side-effect key" do
+      tenant = create_tenant()
+      agent = create_agent(tenant)
+      {:ok, run} = Norns.Runs.create_run(%{tenant_id: tenant.id, agent_id: agent.id, trigger_type: "message", status: "running"})
+
+      Norns.Runs.append_event(run, %{
+        event_type: "tool_result",
+        payload: %{
+          "tool_use_id" => "call_1",
+          "content" => "stored-once",
+          "is_error" => false,
+          "step" => 1,
+          "idempotency_key" => "run:#{run.id}:step:1:tool:call_1:name:side_effect"
+        }
+      })
+
+      tool = %Tool{
+        name: "side_effect",
+        description: "Should not run twice",
+        input_schema: %{},
+        side_effect?: true,
+        handler: fn _ -> flunk("expected persisted result reuse") end
+      }
+
+      [result] =
+        Executor.execute_all(
+          [%{"id" => "call_1", "type" => "tool_use", "name" => "side_effect", "input" => %{}}],
+          [tool],
+          run: run,
+          step: 1
+        )
+
+      assert result["content"] == "stored-once"
+      assert result["idempotency_key"] == "run:#{run.id}:step:1:tool:call_1:name:side_effect"
+      assert result["duplicate_detected"] == true
+      assert result["duplicate_original_event_sequence"] == 1
+      refute result["is_error"]
     end
   end
 end

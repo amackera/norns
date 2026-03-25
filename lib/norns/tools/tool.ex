@@ -2,14 +2,15 @@ defmodule Norns.Tools.Tool do
   @moduledoc "A tool that an agent can invoke during execution."
 
   @enforce_keys [:name, :description, :input_schema, :handler]
-  defstruct [:name, :description, :input_schema, :handler, source: :local]
+  defstruct [:name, :description, :input_schema, :handler, source: :local, side_effect?: false]
 
   @type t :: %__MODULE__{
           name: String.t(),
           description: String.t(),
           input_schema: map(),
           handler: (map() -> {:ok, String.t()} | {:error, String.t()}),
-          source: :local | {:remote, term()}
+          source: :local | {:remote, term()},
+          side_effect?: boolean()
         }
 
   @doc "Convert to the Anthropic API tool format."

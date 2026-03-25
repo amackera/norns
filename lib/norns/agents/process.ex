@@ -14,7 +14,7 @@ defmodule Norns.Agents.Process do
   alias Norns.{Agents, Conversations, LLM, Runs, Tenants}
   alias Norns.Agents.AgentDef
   alias Norns.Runtime.{ErrorPolicy, Errors, Events}
-  alias Norns.Tools.{Executor, Tool}
+  alias Norns.Tools.{Executor, Idempotency, Tool}
   @tool_result_cap 200
 
   # -- Public API --
@@ -189,7 +189,12 @@ defmodule Norns.Agents.Process do
       {:ok, resumed_state} ->
         broadcast(resumed_state, :agent_resumed, %{run_id: run_id})
         action = resumed_state.resume_action || :llm_loop
-        {:noreply, %{resumed_state | resume_action: nil}, {:continue, action}}
+        resumed_state = %{resumed_state | resume_action: nil}
+
+        case action do
+          :waiting -> {:noreply, resumed_state}
+          _ -> {:noreply, resumed_state, {:continue, action}}
+        end
 
       {:error, reason} ->
         Logger.error("Failed to resume run #{run_id}: #{inspect(reason)}")
@@ -210,6 +215,9 @@ defmodule Norns.Agents.Process do
       Enum.split_with(tool_use_blocks, fn block -> block["name"] == "ask_user" end)
 
     Enum.each(regular_blocks, fn block ->
+      tool = Enum.find(state.agent_def.tools, &(&1.name == block["name"]))
+      idempotency = if tool, do: Idempotency.context(state.run, state.step, block, tool), else: %{}
+
       if log_calls? do
         append(
           state.run,
@@ -217,7 +225,9 @@ defmodule Norns.Agents.Process do
             "tool_use_id" => block["id"],
             "name" => block["name"],
             "input" => block["input"],
-            "step" => state.step
+            "step" => state.step,
+            "side_effect" => Map.get(idempotency, :side_effect?, false),
+            "idempotency_key" => Map.get(idempotency, :idempotency_key)
           })
         )
 
@@ -237,27 +247,44 @@ defmodule Norns.Agents.Process do
 
         results =
           try do
-            Executor.execute_all(regular_blocks, state.agent_def.tools)
+            Executor.execute_all(regular_blocks, state.agent_def.tools, run: state.run, step: state.step)
           after
             Process.delete(:norns_tool_context)
           end
 
         Enum.each(results, fn result ->
-          append(
-            state.run,
-            Events.tool_result(%{
-              "tool_use_id" => result["tool_use_id"],
-              "content" => result["content"],
-              "is_error" => Map.get(result, "is_error", false),
-              "step" => state.step
-            })
-          )
+          if result["duplicate_detected"] do
+            append(
+              state.run,
+              Events.tool_duplicate(%{
+                "tool_use_id" => result["tool_use_id"],
+                "name" => result["name"],
+                "idempotency_key" => result["idempotency_key"],
+                "step" => state.step,
+                "original_event_sequence" => result["duplicate_original_event_sequence"],
+                "resolution" => result["duplicate_resolution"]
+              })
+            )
+          else
+            append(
+              state.run,
+              Events.tool_result(%{
+                "tool_use_id" => result["tool_use_id"],
+                "content" => result["content"],
+                "is_error" => Map.get(result, "is_error", false),
+                "step" => state.step,
+                "idempotency_key" => result["idempotency_key"]
+              })
+            )
+          end
 
           broadcast(state, :tool_result, %{
             tool_use_id: result["tool_use_id"],
             content: result["content"]
           })
         end)
+
+        maybe_invoke_test_hook(state, :after_tool_execution_before_result_persisted, %{results: results, step: state.step})
 
         results
       end
@@ -671,6 +698,9 @@ defmodule Norns.Agents.Process do
                  remove_pending_tool_call(pending_calls, event.payload["tool_use_id"])}
             end
 
+          "tool_duplicate" ->
+            {msgs, current_step, ask_state, remove_pending_tool_call(pending_calls, event.payload["tool_use_id"])}
+
           "waiting_for_user" ->
             pending_ask = %{
               tool_use_id: event.payload["tool_use_id"],
@@ -693,7 +723,7 @@ defmodule Norns.Agents.Process do
 
     resume_action =
       cond do
-        ask_state -> nil
+        ask_state -> :waiting
         pending_calls != [] -> {:resume_tools, pending_calls}
         true -> :llm_loop
       end

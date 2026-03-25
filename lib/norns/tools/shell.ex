@@ -19,6 +19,9 @@ defmodule Norns.Tools.Shell do
   def description, do: "Execute a shell command. Only allowlisted commands are permitted."
 
   @impl true
+  def side_effect?, do: true
+
+  @impl true
   def input_schema do
     %{
       "type" => "object",
@@ -43,9 +46,11 @@ defmodule Norns.Tools.Shell do
   def execute(_), do: {:error, "Missing required parameter: command"}
 
   defp run_command(command) do
+    env = shell_env()
+
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-c", command], stderr_to_stdout: true)
+        System.cmd("sh", ["-c", command], stderr_to_stdout: true, env: env)
       end)
 
     case Task.yield(task, @timeout_ms) || Task.shutdown(task) do
@@ -62,5 +67,20 @@ defmodule Norns.Tools.Shell do
   defp allowlist do
     Application.get_env(:norns, __MODULE__, [])
     |> Keyword.get(:allowlist, @default_allowlist)
+  end
+
+  defp shell_env do
+    case Process.get(:norns_tool_context) do
+      %{idempotency_key: key, run_id: run_id, tool_use_id: tool_use_id, step: step} when is_binary(key) ->
+        [
+          {"NORNS_IDEMPOTENCY_KEY", key},
+          {"NORNS_RUN_ID", Integer.to_string(run_id)},
+          {"NORNS_TOOL_USE_ID", tool_use_id},
+          {"NORNS_RUN_STEP", Integer.to_string(step)}
+        ]
+
+      _ ->
+        []
+    end
   end
 end

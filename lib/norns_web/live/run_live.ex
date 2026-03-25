@@ -65,6 +65,24 @@ defmodule NornsWeb.RunLive do
       </div>
     <% end %>
 
+    <%= if @run.status == "failed" do %>
+      <% inspector = Runs.failure_inspector(@run) %>
+      <div class="mb-6">
+        <h2 class="text-sm font-bold text-gray-400 mb-2">Failure Inspector</h2>
+        <div class="bg-gray-900 border border-gray-800 rounded p-4 text-sm text-gray-300 space-y-2">
+          <div>Error class: <span class="text-white"><%= inspector["error_class"] || "unknown" %></span></div>
+          <div>Error code: <span class="text-white"><%= inspector["error_code"] || "unknown" %></span></div>
+          <div>Retry decision: <span class="text-white"><%= inspector["retry_decision"] || "unknown" %></span></div>
+          <%= if checkpoint = inspector["last_checkpoint"] do %>
+            <div>Last checkpoint: <span class="text-white">#<%= checkpoint["sequence"] %> <%= checkpoint["event_type"] %></span></div>
+          <% end %>
+          <%= if event = inspector["last_event"] do %>
+            <div>Last event: <span class="text-white">#<%= event["sequence"] %> <%= event["event_type"] %></span></div>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+
     <%!-- Event timeline --%>
     <h2 class="text-sm font-bold text-gray-400 mb-2">Event Log</h2>
     <div class="space-y-1">
@@ -107,6 +125,7 @@ defmodule NornsWeb.RunLive do
   defp event_type_color("llm_response"), do: "text-blue-400"
   defp event_type_color("tool_call"), do: "text-yellow-400"
   defp event_type_color("tool_result"), do: "text-yellow-300"
+  defp event_type_color("tool_duplicate"), do: "text-orange-300"
   defp event_type_color("checkpoint_saved"), do: "text-gray-500"
   defp event_type_color("checkpoint"), do: "text-gray-500"
   defp event_type_color("retry"), do: "text-orange-400"
@@ -123,6 +142,7 @@ defmodule NornsWeb.RunLive do
   defp event_summary(%{event_type: "llm_response", payload: %{"stop_reason" => sr}}), do: sr
   defp event_summary(%{event_type: "tool_call", payload: %{"name" => name}}), do: name
   defp event_summary(%{event_type: "tool_result", payload: %{"tool_use_id" => id}}), do: id
+  defp event_summary(%{event_type: "tool_duplicate", payload: %{"tool_use_id" => id}}), do: id
   defp event_summary(%{event_type: "checkpoint_saved", payload: %{"step" => s}}), do: "step #{s}"
   defp event_summary(%{event_type: "checkpoint", payload: %{"step" => s}}), do: "step #{s}"
   defp event_summary(%{event_type: "retry", payload: %{"attempt" => a}}), do: "attempt #{a}"
@@ -134,6 +154,7 @@ defmodule NornsWeb.RunLive do
 
   defp event_detail(%{event_type: "tool_call", payload: %{"input" => input}}), do: inspect(input, pretty: true, limit: 200)
   defp event_detail(%{event_type: "tool_result", payload: %{"content" => c}}) when is_binary(c), do: String.slice(c, 0, 200)
+  defp event_detail(%{event_type: "tool_duplicate", payload: %{"resolution" => resolution, "idempotency_key" => key}}), do: "#{resolution}: #{key}"
   defp event_detail(%{event_type: "llm_response", payload: %{"usage" => %{"input_tokens" => i, "output_tokens" => o}}}), do: "#{i} in / #{o} out tokens"
   defp event_detail(%{event_type: "run_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 200)
   defp event_detail(%{event_type: "agent_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 200)

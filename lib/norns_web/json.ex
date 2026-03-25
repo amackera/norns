@@ -27,6 +27,8 @@ defmodule NornsWeb.JSON do
       trigger_type: run.trigger_type,
       input: run.input,
       output: run.output,
+      failure_metadata: run.failure_metadata || %{},
+      failure_inspector: Norns.Runs.failure_inspector(run),
       inserted_at: run.inserted_at,
       updated_at: run.updated_at
     }

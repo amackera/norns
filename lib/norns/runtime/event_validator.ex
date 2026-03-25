@@ -69,8 +69,9 @@ defmodule Norns.Runtime.EventValidator do
       "run_started" -> [schema_version_validator()]
       "llm_request" -> [schema_version_validator(), required_integer("step"), required_integer("message_count")]
       "llm_response" -> [schema_version_validator(), required_integer("step"), content_or_response(), optional_stop_reason(), optional_map("usage")]
-      "tool_call" -> [schema_version_validator(), required_string("tool_use_id"), required_string("name"), required_map("input"), required_integer("step")]
-      "tool_result" -> [schema_version_validator(), required_string("tool_use_id"), required_field("content"), required_boolean("is_error"), required_integer("step")]
+      "tool_call" -> [schema_version_validator(), required_string("tool_use_id"), required_string("name"), required_map("input"), required_integer("step"), optional_string("idempotency_key"), optional_boolean("side_effect")]
+      "tool_duplicate" -> [schema_version_validator(), required_string("tool_use_id"), required_string("name"), required_string("idempotency_key"), required_integer("step"), required_integer("original_event_sequence"), required_string("resolution")]
+      "tool_result" -> [schema_version_validator(), required_string("tool_use_id"), required_field("content"), required_boolean("is_error"), required_integer("step"), optional_string("idempotency_key")]
       "checkpoint_saved" -> [schema_version_validator(), required_list("messages"), required_integer("step")]
       "run_failed" -> [schema_version_validator(), required_string("error"), required_string("error_class"), required_string("error_code"), required_string("retry_decision")]
       "run_completed" -> [schema_version_validator(), required_string("output")]
@@ -118,6 +119,16 @@ defmodule Norns.Runtime.EventValidator do
     end
   end
 
+  defp optional_boolean(key) do
+    fn payload ->
+      case payload[key] do
+        nil -> :ok
+        value when is_boolean(value) -> :ok
+        _ -> {:error, %{payload: "#{key} must be a boolean"}}
+      end
+    end
+  end
+
   defp required_map(key) do
     fn payload ->
       case payload[key] do
@@ -142,6 +153,16 @@ defmodule Norns.Runtime.EventValidator do
         nil -> :ok
         value when is_map(value) -> :ok
         _ -> {:error, %{payload: "#{key} must be a map"}}
+      end
+    end
+  end
+
+  defp optional_string(key) do
+    fn payload ->
+      case payload[key] do
+        nil -> :ok
+        value when is_binary(value) and value != "" -> :ok
+        _ -> {:error, %{payload: "#{key} must be a string"}}
       end
     end
   end

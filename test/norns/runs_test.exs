@@ -76,4 +76,48 @@ defmodule Norns.RunsTest do
                payload: %{"step" => "bad", "message_count" => 1}
              })
   end
+
+  test "builds failure inspector from run metadata and events" do
+    tenant = create_tenant()
+    agent = create_agent(tenant)
+
+    {:ok, run} =
+      Runs.create_run(%{
+        tenant_id: tenant.id,
+        agent_id: agent.id,
+        trigger_type: "external",
+        status: "failed",
+        failure_metadata: %{
+          "error_class" => "internal",
+          "error_code" => "runtime_failure",
+          "retry_decision" => "terminal"
+        }
+      })
+
+    Runs.append_event(run, %{event_type: "run_started"})
+
+    Runs.append_event(run, %{
+      event_type: "checkpoint_saved",
+      payload: %{"messages" => [%{role: "user", content: "hi"}], "step" => 1}
+    })
+
+    Runs.append_event(run, %{
+      event_type: "run_failed",
+      payload: %{
+        "error" => "boom",
+        "error_class" => "internal",
+        "error_code" => "runtime_failure",
+        "retry_decision" => "terminal"
+      }
+    })
+
+    inspector = Runs.failure_inspector(run)
+    assert inspector["error_class"] == "internal"
+    assert inspector["error_code"] == "runtime_failure"
+    assert inspector["retry_decision"] == "terminal"
+    assert inspector["last_checkpoint"]["event_type"] == "checkpoint_saved"
+    assert inspector["last_checkpoint"]["sequence"] == 2
+    assert inspector["last_event"]["event_type"] == "run_failed"
+    assert inspector["last_event"]["sequence"] == 3
+  end
 end

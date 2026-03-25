@@ -30,7 +30,7 @@ defmodule Norns.Tools.Http do
   @impl true
   def execute(%{"url" => url} = input) do
     method = String.upcase(input["method"] || "GET")
-    headers = parse_headers(input["headers"])
+    headers = input["headers"] |> parse_headers() |> maybe_put_idempotency_header(method)
     body = input["body"]
 
     result =
@@ -88,4 +88,13 @@ defmodule Norns.Tools.Http do
     Enum.map(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
   end
   defp parse_headers(_), do: []
+
+  defp maybe_put_idempotency_header(headers, "POST") do
+    case Process.get(:norns_tool_context) do
+      %{idempotency_key: key} when is_binary(key) -> [{"idempotency-key", key} | headers]
+      _ -> headers
+    end
+  end
+
+  defp maybe_put_idempotency_header(headers, _method), do: headers
 end
