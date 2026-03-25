@@ -35,10 +35,11 @@ lib/norns/
   conversations/    — Conversation schema + context (persistent chat history)
   memories/         — Memory schema + context (cross-conversation knowledge)
   runs/             — Run + RunEvent schemas, Runs context (event log)
+  runtime/          — Event contracts, error taxonomy, retry policy, idempotency
   workers/          — ResumeAgents, WorkerRegistry, TaskQueue, RunAgent (Oban)
   llm.ex            — LLM dispatcher
   llm/              — Behaviour, Anthropic adapter, Fake (test double)
-  tools/            — Behaviour, Tool struct, Executor, Registry, built-in tools
+  tools/            — Behaviour, Tool struct, Executor, Registry, Idempotency, built-in tools
 
 lib/norns_web/
   endpoint.ex       — Phoenix endpoint (REST + WebSocket + LiveView)
@@ -78,8 +79,15 @@ lib/norns_web/
 ### Tools
 - Built-in: `web_search` (DuckDuckGo), `http_request`, `shell`, `ask_user`, `store_memory`, `search_memory`
 - Tools can be local (function call) or remote (dispatched to connected worker via WebSocket)
+- Tools can declare `side_effect?: true` — these get idempotency keys to prevent duplicate execution
 - `ask_user` pauses the agent and waits for human input (interrupt/resume)
 - `store_memory` / `search_memory` provide cross-conversation knowledge persistence
+
+### Runtime Contracts
+- All events versioned (`schema_version: 1`) and validated via `Norns.Runtime.Events`
+- 5-class error taxonomy with deterministic retry policy
+- Idempotent side effects: deterministic keys prevent re-execution under replay
+- Failure inspector for operator diagnosis (error_class, error_code, retry_decision, last checkpoint)
 
 ### Policies
 - Checkpoint policies: `:every_step`, `:on_tool_call`, `:manual`
@@ -106,4 +114,5 @@ lib/norns_web/
 4. **Worker Protocol** ✓ — persistent WebSocket connections, remote tool execution, task queue
 5. **Conversations + Memory** ✓ — task vs conversation mode, sliding window context, cross-conversation memory
 6. **Dashboard** ✓ — LiveView UI, tenant setup, agent management
-7. **SDKs** — TypeScript/Python clients
+7. **Runtime Contracts** ✓ — typed events, error taxonomy, idempotency, failure inspector, replay conformance
+8. **SDKs** — TypeScript/Python clients

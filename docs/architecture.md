@@ -182,6 +182,55 @@ Three socket endpoints:
 - `/tools` — built-in and worker-provided tools
 - `/setup` — tenant creation (first visit)
 
+## Runtime Contracts
+
+### Event System
+
+All runtime state is captured as versioned, validated events. Events are constructed via `Norns.Runtime.Events` which validates payloads before persistence. All events carry `schema_version: 1`.
+
+Core event types:
+- **Lifecycle:** `run_started`, `run_completed`, `run_failed`
+- **LLM interaction:** `llm_request`, `llm_response`
+- **Tool execution:** `tool_call`, `tool_result`, `tool_duplicate`
+- **Checkpointing:** `checkpoint_saved`
+- **Human-in-the-loop:** `waiting_for_user`, `user_response`
+- **Retry:** `retry`
+
+### Error Classification
+
+Runtime failures are classified into 5 categories (`Norns.Runtime.Errors`):
+
+| Class | Example | Retry behavior |
+|-------|---------|---------------|
+| `transient` | timeout | up to 3 retries, exponential backoff |
+| `external_dependency` | rate limit, upstream down | up to 10 retries, linear backoff |
+| `validation` | invalid payload | terminal |
+| `policy` | policy violation | terminal |
+| `internal` | unexpected runtime error | terminal |
+
+`Norns.Runtime.ErrorPolicy` maps class/code pairs to deterministic retry decisions. Failed runs persist `error_class`, `error_code`, and `retry_decision` in `failure_metadata` for operator inspection.
+
+### Idempotency
+
+Side-effecting tool calls (POST requests, shell commands, tools marked `side_effect?: true`) get deterministic idempotency keys: `run:{id}:step:{step}:tool:{use_id}:name:{name}`.
+
+On replay or retry, the executor checks for an existing `tool_result` event with the same idempotency key. If found, it returns the persisted result without re-executing. This guarantees exactly-once semantics for side effects.
+
+### Checkpoint/Restore Contract
+
+- `checkpoint_saved` snapshots `messages` and `step`
+- Replay restores from the latest checkpoint, then replays later events in sequence order
+- If replay ends with unresolved `tool_call` and no matching `tool_result`, resume executes pending tools once without writing duplicate events
+- If replay ends after `tool_result` but before checkpoint, reconstructed state must match pre-crash message history
+- Proven by the replay conformance test suite
+
+### Failure Inspector
+
+Failed runs expose structured failure data via the API:
+- `failure_metadata`: `error_class`, `error_code`, `retry_decision`
+- `failure_inspector`: last checkpoint event, last event before failure
+- Operators can answer "what failed, why, and what now" in under 60 seconds
+
 ## Data Model
 
 Event-sourced persistence in Postgres via Ecto.
@@ -191,18 +240,17 @@ tenants        — name, slug, api_keys
 agents         — name, purpose, system_prompt, model, model_config, max_steps, status
 conversations  — agent_id, key, messages (jsonb), summary, message_count, token_estimate
 memories       — agent_id, key (unique per agent), content, metadata
-runs           — status, trigger_type, input, output, agent_id, conversation_id
-run_events     — sequence, event_type, payload, source, metadata, run_id
+runs           — status, trigger_type, input, output, failure_metadata, agent_id, conversation_id
+run_events     — sequence, event_type, payload (schema_version: 1), source, metadata, run_id
 ```
-
-Event types: `agent_started`, `llm_request`, `llm_response`, `tool_call`, `tool_result`, `checkpoint`, `retry`, `waiting_for_user`, `user_response`, `agent_completed`, `agent_error`
 
 ## Crash Recovery
 
-1. Find the last `checkpoint` event (full message snapshot)
+1. Find the last `checkpoint_saved` event (full message snapshot)
 2. Replay events after the checkpoint to rebuild message history
 3. For conversation mode: load persisted conversation as the base, then replay run events on top
-4. Resume the LLM-tool loop from where it left off (or resume to waiting state if interrupted)
+4. Side-effecting tools are not re-executed if their idempotency key matches a persisted result
+5. Resume the LLM-tool loop from where it left off (or resume to waiting state if interrupted)
 
 On boot, `Workers.ResumeAgents` finds runs with status `"running"` and no live process, and resumes them with the correct conversation key.
 
@@ -244,7 +292,10 @@ Task vs conversation mode, sliding window context, persistent agent memory, `ask
 ### Phase 6: Dashboard ✓
 LiveView UI, tenant setup, agent creation, live event streaming, run timeline.
 
-### Phase 7: SDKs
+### Phase 7: Runtime Contracts ✓
+Typed/versioned events, error classification, deterministic retry policy, idempotent side effects, failure inspector, replay conformance suite.
+
+### Phase 8: SDKs
 TypeScript/Python clients for defining agents and tools in other languages.
 
 ### Skip For Now

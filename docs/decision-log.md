@@ -11,7 +11,7 @@ Last updated: 2026-03-25
   2. operator control
   3. queryable execution state without re-inference
 - Transcript persistence is often sufficient for simple single-agent flows; Norns focuses on production execution guarantees.
-- Worker-hosted execution remains deferred (see `docs/plan-worker-hosted-execution.md`).
+- Worker-hosted execution remains deferred.
 - Broader framework/platform expansion is explicitly de-prioritized until reliability core is hardened.
 
 ### Durable agent runtime on BEAM
@@ -131,6 +131,14 @@ Last updated: 2026-03-25
 - `Norns.LLM.Fake` — ETS-backed scripted responses + call recording for tests
 - Current date auto-injected into system prompt
 - Old tool results compacted to 200 chars before sending to LLM (token management)
+
+### Runtime contracts (Phase 7)
+- All events versioned (`schema_version: 1`) and validated via `Norns.Runtime.Events` before persistence
+- 5-class error taxonomy with deterministic retry policy (`Norns.Runtime.ErrorPolicy`)
+- Idempotent side effects: deterministic keys prevent duplicate execution under replay/retry
+- Tools can declare `side_effect?: true` via behaviour callback
+- Failure inspector: `failure_metadata` on runs + structured API response for operator diagnosis
+- Replay conformance test suite proves checkpoint/restore invariants
 
 ### Docker Compose for all dev tooling
 - No local Elixir install. `Dockerfile.dev` + app service in docker-compose
