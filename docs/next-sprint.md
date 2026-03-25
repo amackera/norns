@@ -3,7 +3,7 @@
 Last updated: 2026-03-25
 Sprint goal: tighten execution reliability and operator clarity.
 
-Reconciled with: `docs/plan-scope-reset.md`
+Reconciled with: `docs/plan-scope-reset.md` and `docs/implementation-plan-unified.md`
 
 ## Completed Baseline (previous sprint)
 
