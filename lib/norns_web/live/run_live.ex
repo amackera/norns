@@ -101,7 +101,7 @@ defmodule NornsWeb.RunLive do
     <%!-- Event timeline --%>
     <h2 class="text-sm font-bold text-gray-400 mb-2">Event Log</h2>
     <div class="space-y-1">
-      <%= for event <- @events do %>
+      <%= for event <- Enum.reverse(@events) do %>
         <div class="bg-gray-900 border border-gray-800 rounded px-4 py-2">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
