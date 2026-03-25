@@ -49,7 +49,9 @@ defmodule Norns.Tools.ExecutorTest do
         end
       }
 
-      assert {:ok, "run:#{run.id}:step:2:tool:call_1:name:side_effect", %{"idempotency_key" => "run:#{run.id}:step:2:tool:call_1:name:side_effect"}} =
+      expected_key = "run:#{run.id}:step:2:tool:call_1:name:side_effect"
+
+      assert {:ok, ^expected_key, %{"idempotency_key" => ^expected_key}} =
                Executor.execute(%{"id" => "call_1", "name" => "side_effect", "input" => %{}}, [tool], run: run, step: 2)
     end
   end
