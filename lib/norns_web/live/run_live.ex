@@ -39,6 +39,14 @@ defmodule NornsWeb.RunLive do
       <span class="text-xs text-gray-500"><%= @run.status %></span>
     </div>
 
+    <%!-- Input message --%>
+    <%= if @run.input["user_message"] do %>
+      <div class="bg-gray-900 border border-gray-800 rounded p-4 mb-6">
+        <div class="text-xs text-gray-500 mb-1">Input</div>
+        <div class="text-sm text-gray-300"><%= @run.input["user_message"] %></div>
+      </div>
+    <% end %>
+
     <%!-- Run info --%>
     <div class="grid grid-cols-3 gap-4 mb-6">
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
