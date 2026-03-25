@@ -180,3 +180,11 @@ Last updated: 2026-03-25
 ### E) Context summarization
 - Currently sliding window only (discard old messages)
 - Future: LLM-powered summarization of old context into a paragraph
+
+### F) Policy enforcement (pre-dispatch hook)
+- Natural enforcement point between "LLM decided to call a tool" and "tool dispatched to worker"
+- Design: ship a hook, not a built-in engine. One `pre_dispatch` field on AgentDef, one behaviour callback
+- Two flavors: rule-based (orchestrator evaluates, fast) and LLM-evaluated (worker evaluates, slower)
+- Policies defined in user code via SDK, registered alongside tools on worker connect
+- Policy violations use existing interrupt/resume (`ask_user`) mechanism
+- Decision: don't build until someone asks. The architecture supports it when needed.

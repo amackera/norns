@@ -333,6 +333,61 @@ TypeScript/Python clients for defining agents and tools in other languages.
 - LLM streaming
 - Vector memory (pgvector)
 
+## Future: Policy Enforcement
+
+There's a natural enforcement point in the orchestrator between "LLM decided to call a tool" and "tool dispatched to worker." This is the right place for policy checks — the orchestrator sees every event and controls the state machine.
+
+### Design Principle: Hook, Don't Build In
+
+Norns should ship the extension point, not the policy engine. One field on AgentDef, one behaviour:
+
+```elixir
+%AgentDef{
+  ...
+  pre_dispatch: nil  # or a module implementing Norns.Policy behaviour
+}
+
+# The behaviour
+@callback evaluate(tool_calls, context) ::
+  [{:allow, call} | {:deny, call, reason} | {:approval_needed, call, reason}]
+```
+
+No new tables, no new modules, no complexity unless you opt in. A no-op default means the system is exactly as simple as it is today.
+
+### Two Flavors of Policy
+
+**Rule-based policies** — declarative conditions evaluated by the orchestrator. Fast, no LLM call needed.
+
+```python
+@policy(tool="process_refund")
+def refund_limit(call, context):
+    if call.input["amount"] > 1000:
+        return Policy.require_approval(f"Refund exceeds $1000")
+    return Policy.allow()
+```
+
+**LLM-evaluated policies** — an overseer LLM checks the agent's output before it's acted on. Runs on the worker (it requires inference). Useful for soft constraints: "don't share internal pricing," "responses must be professional."
+
+```python
+@policy(tool="*", type="llm_overseer")
+def no_internal_pricing(call, context):
+    """Don't share internal pricing formulas with customers."""
+    pass  # docstring IS the policy prompt
+```
+
+### How Policies Are Defined
+
+Policies live in user code, alongside tools and agent definitions. The SDK registers them with the orchestrator as part of the worker's join payload. This keeps Norns minimal — it provides the hook and the interrupt mechanism, users bring the rules.
+
+- Rule-based: serialized as declarative conditions, evaluated by orchestrator (fast)
+- LLM-evaluated: evaluated by worker before dispatching the tool (requires inference)
+- Policy violations use the existing interrupt/resume flow (`ask_user` mechanism)
+- Denied calls feed an error result back to the LLM so it can try a different approach
+
+### When to Build
+
+Not now. The architecture supports it — the pre-dispatch hook point is where it goes when someone needs it. Build it when the first real user asks for policy enforcement.
+
 ## Business Model
 
 - **Norns Runtime** (open source, MIT) — self-hosted durable agent framework
