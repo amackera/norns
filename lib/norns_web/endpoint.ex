@@ -12,6 +12,12 @@ defmodule NornsWeb.Endpoint do
   socket "/worker", NornsWeb.WorkerSocket, websocket: true
   socket "/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]]
 
+  if code_reloading? do
+    socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
+    plug Phoenix.LiveReloader
+    plug Phoenix.CodeReloader
+  end
+
   plug Plug.Static,
     at: "/",
     from: :norns,

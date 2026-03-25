@@ -10,9 +10,14 @@
     --color-red-400: oklch(70.4% 0.191 22.216);
     --color-red-800: oklch(44.4% 0.177 26.899);
     --color-red-900: oklch(39.6% 0.141 25.723);
+    --color-orange-300: oklch(83.7% 0.128 66.29);
     --color-orange-400: oklch(75% 0.183 55.934);
     --color-yellow-300: oklch(90.5% 0.182 98.111);
     --color-yellow-400: oklch(85.2% 0.199 91.936);
+    --color-yellow-500: oklch(79.5% 0.184 86.047);
+    --color-yellow-700: oklch(55.4% 0.135 66.442);
+    --color-yellow-800: oklch(47.6% 0.114 61.907);
+    --color-yellow-900: oklch(42.1% 0.095 57.708);
     --color-green-300: oklch(87.1% 0.15 154.449);
     --color-green-400: oklch(79.2% 0.209 151.711);
     --color-green-600: oklch(62.7% 0.194 149.214);
@@ -49,7 +54,6 @@
     --font-weight-medium: 500;
     --font-weight-bold: 700;
     --tracking-tight: -0.025em;
-    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
     --default-font-family: var(--font-sans);
     --default-mono-font-family: var(--font-mono);
   }
@@ -381,10 +385,11 @@
       margin-block-end: calc(calc(var(--spacing) * 4) * calc(1 - var(--tw-space-y-reverse)));
     }
   }
-  .truncate {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .gap-x-6 {
+    column-gap: calc(var(--spacing) * 6);
+  }
+  .gap-y-1 {
+    row-gap: calc(var(--spacing) * 1);
   }
   .overflow-y-auto {
     overflow-y: auto;
@@ -424,6 +429,12 @@
   .border-red-900 {
     border-color: var(--color-red-900);
   }
+  .border-yellow-700 {
+    border-color: var(--color-yellow-700);
+  }
+  .border-yellow-800 {
+    border-color: var(--color-yellow-800);
+  }
   .bg-blue-400 {
     background-color: var(--color-blue-400);
   }
@@ -457,6 +468,15 @@
   .bg-white {
     background-color: var(--color-white);
   }
+  .bg-yellow-400 {
+    background-color: var(--color-yellow-400);
+  }
+  .bg-yellow-900\/20 {
+    background-color: color-mix(in srgb, oklch(42.1% 0.095 57.708) 20%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-yellow-900) 20%, transparent);
+    }
+  }
   .p-3 {
     padding: calc(var(--spacing) * 3);
   }
@@ -489,6 +509,9 @@
   }
   .py-4 {
     padding-block: calc(var(--spacing) * 4);
+  }
+  .pt-2 {
+    padding-top: calc(var(--spacing) * 2);
   }
   .text-center {
     text-align: center;
@@ -576,6 +599,9 @@
   .text-green-600 {
     color: var(--color-green-600);
   }
+  .text-orange-300 {
+    color: var(--color-orange-300);
+  }
   .text-orange-400 {
     color: var(--color-orange-400);
   }
@@ -602,10 +628,6 @@
   .blur {
     --tw-blur: blur(8px);
     filter: var(--tw-blur,) var(--tw-brightness,) var(--tw-contrast,) var(--tw-grayscale,) var(--tw-hue-rotate,) var(--tw-invert,) var(--tw-saturate,) var(--tw-sepia,) var(--tw-drop-shadow,);
-  }
-  .ease-in-out {
-    --tw-ease: var(--ease-in-out);
-    transition-timing-function: var(--ease-in-out);
   }
   .hover\:border-gray-700 {
     &:hover {
@@ -663,9 +685,21 @@
       }
     }
   }
+  .hover\:text-yellow-300 {
+    &:hover {
+      @media (hover: hover) {
+        color: var(--color-yellow-300);
+      }
+    }
+  }
   .focus\:border-gray-500 {
     &:focus {
       border-color: var(--color-gray-500);
+    }
+  }
+  .focus\:border-yellow-500 {
+    &:focus {
+      border-color: var(--color-yellow-500);
     }
   }
   .focus\:outline-none {
@@ -761,10 +795,6 @@ body {
   syntax: "*";
   inherits: false;
 }
-@property --tw-ease {
-  syntax: "*";
-  inherits: false;
-}
 @layer properties {
   @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {
     *, ::before, ::after, ::backdrop {
@@ -785,7 +815,6 @@ body {
       --tw-drop-shadow-color: initial;
       --tw-drop-shadow-alpha: 100%;
       --tw-drop-shadow-size: initial;
-      --tw-ease: initial;
     }
   }
 }

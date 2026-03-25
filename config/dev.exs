@@ -18,13 +18,24 @@ config :norns, Oban,
 config :norns, NornsWeb.Endpoint,
   http: [ip: {0, 0, 0, 0}, port: 4000],
   check_origin: false,
-  secret_key_base: "dev-only-secret-key-base-that-is-at-least-64-bytes-long-for-phoenix"
+  code_reloader: true,
+  debug_errors: true,
+  secret_key_base: "dev-only-secret-key-base-that-is-at-least-64-bytes-long-for-phoenix",
+  watchers: [
+    tailwind: {Tailwind, :install_and_run, [:norns, ~w(--watch)]}
+  ]
 
-# Disable live-reload file watcher — no web UI yet, and containers lack inotify-tools.
-config :phoenix_live_view, enable_expensive_runtime_checks: false
+config :norns, NornsWeb.Endpoint,
+  live_reload: [
+    patterns: [
+      ~r"priv/static/assets/.*(js|css|png|jpeg|jpg|gif|svg)$",
+      ~r"lib/norns_web/(controllers|live|components)/.*(ex|heex)$"
+    ]
+  ]
 
-# No web UI yet — skip tailwind.
-config :tailwind, version: "4.1.12"
+config :phoenix_live_view,
+  debug_heex_annotations: true,
+  enable_expensive_runtime_checks: true
 
 # Default logger to info to avoid noisy SQL debug output in mix tasks.
 config :logger, level: :info

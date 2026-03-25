@@ -1,6 +1,6 @@
 FROM elixir:1.18-otp-27-alpine
 
-RUN apk add --no-cache git build-base
+RUN apk add --no-cache git build-base inotify-tools
 
 WORKDIR /app
 
