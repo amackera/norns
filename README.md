@@ -28,8 +28,8 @@ docker compose up -d
 docker compose run --rm -e POSTGRES_HOST=db app mix ecto.create
 docker compose run --rm -e POSTGRES_HOST=db app mix ecto.migrate
 
-# Start the web UI
-docker compose run --rm -e POSTGRES_HOST=db -p 4000:4000 app mix phx.server
+# Start everything (web UI on port 4000)
+docker compose up
 ```
 
 Open `http://localhost:4000` — you'll be guided through creating your first tenant and API key.
