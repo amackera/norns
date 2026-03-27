@@ -102,4 +102,4 @@ lib/norns_web/
 6. **Dashboard** ✓ — LiveView UI, tenant setup, agent management
 7. **Runtime Contracts** ✓ — typed events, error taxonomy, idempotency, failure inspector
 8. **Orchestrator/Worker Split** ✓ — pure state machine orchestrator, all execution on workers
-9. **SDKs** — TypeScript/Python clients
+9. **SDKs** (in progress) — Python worker implemented, client next. TypeScript to follow.

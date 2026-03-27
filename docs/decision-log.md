@@ -158,11 +158,13 @@ Last updated: 2026-03-25
 
 ## Open
 
-### A) SDK design (Phase 9)
-- TypeScript and Python SDKs
-- `@tool` decorator generates JSON schema from type hints
-- `run.stream()` as WebSocket iterator over agent events
-- `Worker.connect()` as long-lived WebSocket to `/worker`
+### A) SDK design (Phase 9, in progress)
+- Temporal-style client/worker split: `Norns` (worker) and `NornsClient` (client)
+- Python worker implemented: `@tool` decorator, `Agent` class, WebSocket worker, auto-reconnect
+- Python client next: `send_message(wait=True)`, run queries, event streaming
+- TypeScript SDK to follow with equivalent API
+- Server-side needed: return `run_id` in send_message 202 response
+- See `docs/plan-sdk-design.md`
 
 ### B) LLM provider abstraction
 - Currently Anthropic-only via behaviour pattern

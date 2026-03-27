@@ -324,8 +324,8 @@ Typed/versioned events, error classification, deterministic retry policy, idempo
 ### Phase 8: Orchestrator/Worker Split ✓
 Pure state machine orchestrator — all LLM calls and tool execution dispatched to workers. DefaultWorker for self-hosted mode. Agent never blocked, always responsive.
 
-### Phase 9: SDKs
-TypeScript/Python clients for defining agents and tools in other languages.
+### Phase 9: SDKs (in progress)
+Python SDK with Temporal-style client/worker split. Worker implemented (`Norns` class — connects, registers agents/tools, handles tasks). Client next (`NornsClient` — sends messages, queries runs, streams events). TypeScript SDK to follow.
 
 ### Skip For Now
 - Multi-node clustering (port Registry to Horde)

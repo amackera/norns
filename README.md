@@ -232,6 +232,49 @@ A built-in `DefaultWorker` ships with Norns and handles LLM calls + built-in too
 
 If a worker disconnects, pending tasks are queued and flushed when it reconnects.
 
+## Python SDK
+
+```bash
+pip install norns-sdk
+```
+
+Like Temporal, the SDK has two separate classes: a **worker** (executes things) and a **client** (triggers things).
+
+### Worker — define agents and tools
+
+```python
+from norns import Norns, Agent, tool
+
+@tool
+def search_docs(query: str) -> str:
+    """Search product documentation."""
+    return db.vector_search(query)
+
+agent = Agent(
+    name="support-bot",
+    model="claude-sonnet-4-20250514",
+    system_prompt="You are a customer support agent.",
+    tools=[search_docs],
+    mode="conversation",
+)
+
+norns = Norns("http://localhost:4000", api_key="nrn_...")
+norns.run(agent, llm_api_key=os.environ["ANTHROPIC_API_KEY"])  # blocks forever
+```
+
+### Client — send messages and query results
+
+```python
+from norns import NornsClient
+
+client = NornsClient("http://localhost:4000", api_key="nrn_...")
+
+result = client.send_message("support-bot", "Where's my order?", wait=True)
+print(result.output)
+```
+
+See [norns-sdk-python](https://github.com/amackera/norns-sdk-python) for the full SDK.
+
 ## Running Tests
 
 ```bash
