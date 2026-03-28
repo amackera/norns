@@ -43,13 +43,11 @@ Orchestrator                         Worker (your code)
 
 A built-in DefaultWorker handles everything locally for development. For production, you run your own workers — Norns never touches your API keys or data.
 
-## Python SDK
+## SDKs
 
-```bash
-pip install norns-sdk
-```
+SDKs follow the Temporal model: a **worker** (defines agents and tools, handles execution) and a **client** (sends messages, queries runs).
 
-Define agents and tools in Python. The SDK connects to Norns as a worker.
+### Python
 
 ```python
 from norns import Norns, Agent, tool
@@ -67,11 +65,54 @@ agent = Agent(
     mode="conversation",
 )
 
+# Worker — blocks forever, handles LLM calls and tool execution
 norns = Norns("http://localhost:4000", api_key="nrn_...")
 norns.run(agent, llm_api_key=os.environ["ANTHROPIC_API_KEY"])
 ```
 
+```python
+# Client — send messages, query results
+from norns import NornsClient
+
+client = NornsClient("http://localhost:4000", api_key="nrn_...")
+result = client.send_message("support-bot", "Where's my order?", wait=True)
+print(result.output)
+```
+
 See [norns-sdk-python](https://github.com/amackera/norns-sdk-python).
+
+### Elixir
+
+```elixir
+defmodule MyTools.SearchDocs do
+  use NornsSdk.Tool,
+    name: "search_docs",
+    description: "Search product documentation"
+
+  def input_schema, do: %{"type" => "object", "properties" => %{"query" => %{"type" => "string"}}}
+  def execute(%{"query" => query}), do: {:ok, MyApp.Docs.search(query)}
+end
+
+agent = NornsSdk.Agent.new(
+  name: "support-bot",
+  system_prompt: "You are a customer support agent.",
+  tools: [MyTools.SearchDocs],
+  mode: :conversation
+)
+
+# Add worker to your supervision tree
+children = [
+  {NornsSdk.Worker, url: "http://localhost:4000", api_key: "nrn_...", agent: agent}
+]
+```
+
+```elixir
+# Client
+client = NornsSdk.Client.new("http://localhost:4000", api_key: "nrn_...")
+{:ok, result} = NornsSdk.Client.send_message(client, "support-bot", "Hello!", wait: true)
+```
+
+See [norns-sdk-elixir](https://github.com/amackera/norns-sdk-elixir).
 
 ## What you get
 
