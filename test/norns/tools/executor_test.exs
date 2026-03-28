@@ -94,7 +94,8 @@ defmodule Norns.Tools.ExecutorTest do
       Norns.Runs.append_event(run, %{
         event_type: "tool_result",
         payload: %{
-          "tool_use_id" => "call_1",
+          "tool_call_id" => "call_1",
+          "name" => "side_effect",
           "content" => "stored-once",
           "is_error" => false,
           "step" => 1,

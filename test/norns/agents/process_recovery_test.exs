@@ -38,9 +38,8 @@ defmodule Norns.Agents.ProcessRecoveryTest do
         event_type: "llm_response",
         source: "system",
         payload: %{
-          "content" => [
-            %{"type" => "tool_use", "id" => "call_1", "name" => "search", "arguments" => %{"query" => "elixir"}}
-          ],
+          "content" => "",
+          "tool_calls" => [%{"id" => "call_1", "name" => "search", "arguments" => %{"query" => "elixir"}}],
           "finish_reason" => "tool_call",
           "step" => 1,
           "usage" => %{"input_tokens" => 10, "output_tokens" => 20}
@@ -56,7 +55,7 @@ defmodule Norns.Agents.ProcessRecoveryTest do
       Runs.append_event(run, %{
         event_type: "tool_result",
         source: "system",
-        payload: %{"tool_call_id" => "call_1", "content" => "Elixir is a functional language", "is_error" => false, "step" => 1}
+        payload: %{"tool_call_id" => "call_1", "name" => "search", "content" => "Elixir is a functional language", "is_error" => false, "step" => 1}
       })
 
       # "Crash" happened here — run is still status: "running"
@@ -132,10 +131,8 @@ defmodule Norns.Agents.ProcessRecoveryTest do
         event_type: "llm_response",
         source: "system",
         payload: %{
-          "content" => [
-            %{"type" => "text", "text" => "I'll search for that."},
-            %{"type" => "tool_use", "id" => "c1", "name" => "web_search", "arguments" => %{"query" => "test"}}
-          ],
+          "content" => "I'll search for that.",
+          "tool_calls" => [%{"id" => "c1", "name" => "web_search", "arguments" => %{"query" => "test"}}],
           "finish_reason" => "tool_call",
           "step" => 1,
           "usage" => %{}
@@ -153,6 +150,7 @@ defmodule Norns.Agents.ProcessRecoveryTest do
         source: "system",
         payload: %{
           "tool_call_id" => "c1",
+          "name" => "web_search",
           "content" => "Search results here",
           "is_error" => false,
           "step" => 1
@@ -185,8 +183,8 @@ defmodule Norns.Agents.ProcessRecoveryTest do
       assert original_user_msg.role == "user"
       assert original_user_msg.content == "test"
       assert assistant_msg.role == "assistant"
-      assert tool_result_msg.role == "user"
-      assert is_list(tool_result_msg.content)
+      assert tool_result_msg.role == "tool"
+      assert is_binary(tool_result_msg.content)
     end
 
     test "uses checkpoint when available", %{tenant: tenant, agent: agent} do
@@ -204,12 +202,12 @@ defmodule Norns.Agents.ProcessRecoveryTest do
       Runs.append_event(run, %{
         event_type: "llm_response",
         source: "system",
-        payload: %{"content" => [%{"type" => "text", "text" => "old"}], "finish_reason" => "stop", "usage" => %{}, "step" => 1}
+        payload: %{"content" => "old", "finish_reason" => "stop", "usage" => %{}, "step" => 1}
       })
 
       checkpoint_messages = [
         %{role: "user", content: "hello"},
-        %{role: "assistant", content: [%{"type" => "text", "text" => "old"}]}
+        %{role: "assistant", content: "old"}
       ]
 
       Runs.append_event(run, %{

@@ -50,7 +50,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     Runs.append_event(run, %{
       event_type: "llm_response",
       payload: %{
-        "content" => [%{"type" => "tool_use", "id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "once"}}],
+        "content" => "", "tool_calls" => [%{"id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "once"}}],
         "finish_reason" => "tool_call",
         "usage" => %{"input_tokens" => 10, "output_tokens" => 20},
         "step" => 1
@@ -114,7 +114,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     Runs.append_event(run, %{
       event_type: "llm_response",
       payload: %{
-        "content" => [%{"type" => "tool_use", "id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "once"}}],
+        "content" => "", "tool_calls" => [%{"id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "once"}}],
         "finish_reason" => "tool_call",
         "usage" => %{"input_tokens" => 10, "output_tokens" => 20},
         "step" => 1
@@ -135,6 +135,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
       event_type: "tool_result",
       payload: %{
         "tool_call_id" => "call_1",
+        "name" => "side_effect",
         "content" => "side_effect:once",
         "is_error" => false,
         "step" => 1,
@@ -181,7 +182,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
 
     Fake.set_responses([
       %{
-        content: [%{"type" => "tool_use", "id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "cp"}}],
+        content: [%{"type" => "tool_use", "id" => "call_1", "name" => "side_effect", "input" => %{"value" => "cp"}}],
         stop_reason: "tool_use"
       }
     ])
@@ -219,6 +220,8 @@ defmodule Norns.Runtime.ReplayConformanceTest do
       run: nil,
       status: :idle,
       pending_ask: nil,
+      pending_llm_task: nil,
+      pending_tool_tasks: nil,
       resume_action: nil,
       test_pid: nil
     }
@@ -228,8 +231,8 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     assert rebuilt.step == 1
     assert match?({:resume_tools, [_ | _]}, rebuilt.resume_action)
     assert Enum.any?(rebuilt.messages, fn
-             %{role: "assistant", content: content} when is_list(content) ->
-               Enum.any?(content, &(&1["type"] == "tool_use" and &1["id"] == "call_1"))
+             %{role: "assistant", tool_calls: tool_calls} when is_list(tool_calls) ->
+               Enum.any?(tool_calls, &(&1["id"] == "call_1"))
 
              _ ->
                false
@@ -251,7 +254,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     Runs.append_event(run, %{
       event_type: "checkpoint_saved",
       payload: %{
-        "messages" => [%{role: "user", content: "hello"}, %{role: "assistant", content: [%{"type" => "text", "text" => "old"}]}],
+        "messages" => [%{role: "user", content: "hello"}, %{role: "assistant", content: "old"}],
         "step" => 1
       }
     })
@@ -259,7 +262,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     Runs.append_event(run, %{
       event_type: "llm_response",
       payload: %{
-        "content" => [%{"type" => "text", "text" => "new"}],
+        "content" => "new",
         "finish_reason" => "stop",
         "usage" => %{},
         "step" => 2
@@ -280,7 +283,9 @@ defmodule Norns.Runtime.ReplayConformanceTest do
       status: :idle,
       pending_ask: nil,
       resume_action: nil,
-      test_pid: nil
+      test_pid: nil,
+      pending_llm_task: nil,
+      pending_tool_tasks: nil
     }
 
     {:ok, rebuilt} = AgentProcess.rebuild_state(run.id, base_state)
@@ -289,7 +294,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     assert rebuilt.step == 2
     assert rebuilt.resume_action == :llm_loop
     assert Enum.map(events, & &1.sequence) == Enum.to_list(1..length(events))
-    assert List.last(rebuilt.messages).content == [%{"type" => "text", "text" => "new"}]
+    assert List.last(rebuilt.messages).content == "new"
   end
 
   test "rebuilds waiting runs with deterministic waiting resume action", %{tenant: tenant, agent: agent} do
@@ -307,7 +312,8 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     Runs.append_event(run, %{
       event_type: "llm_response",
       payload: %{
-        "content" => [%{"type" => "tool_use", "id" => "ask_1", "name" => "ask_user", "arguments" => %{"question" => "Need approval?"}}],
+        "content" => "",
+        "tool_calls" => [%{"id" => "ask_1", "name" => "ask_user", "arguments" => %{"question" => "Need approval?"}}],
         "finish_reason" => "tool_call",
         "usage" => %{},
         "step" => 1
@@ -333,14 +339,16 @@ defmodule Norns.Runtime.ReplayConformanceTest do
       status: :idle,
       pending_ask: nil,
       resume_action: nil,
-      test_pid: nil
+      test_pid: nil,
+      pending_llm_task: nil,
+      pending_tool_tasks: nil
     }
 
     {:ok, rebuilt} = AgentProcess.rebuild_state(run.id, base_state)
 
     assert rebuilt.status == :waiting
     assert rebuilt.resume_action == :waiting
-    assert rebuilt.pending_ask.tool_use_id == "ask_1"
+    assert rebuilt.pending_ask.tool_call_id == "ask_1"
   end
 
   test "rebuild skips duplicate side effects and resumes deterministically", %{tenant: tenant, agent: agent} do
@@ -358,7 +366,7 @@ defmodule Norns.Runtime.ReplayConformanceTest do
     Runs.append_event(run, %{
       event_type: "llm_response",
       payload: %{
-        "content" => [%{"type" => "tool_use", "id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "once"}}],
+        "content" => "", "tool_calls" => [%{"id" => "call_1", "name" => "side_effect", "arguments" => %{"value" => "once"}}],
         "finish_reason" => "tool_call",
         "usage" => %{},
         "step" => 1
@@ -403,7 +411,9 @@ defmodule Norns.Runtime.ReplayConformanceTest do
       status: :idle,
       pending_ask: nil,
       resume_action: nil,
-      test_pid: nil
+      test_pid: nil,
+      pending_llm_task: nil,
+      pending_tool_tasks: nil
     }
 
     {:ok, rebuilt} = AgentProcess.rebuild_state(run.id, base_state)

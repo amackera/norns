@@ -54,8 +54,8 @@ defmodule Norns.Agents.Runner do
     append(
       run,
       Events.llm_response(%{
-        "content" => [%{"type" => "text", "text" => response}],
-        "stop_reason" => "end_turn",
+        "content" => response,
+        "finish_reason" => "stop",
         "usage" => %{},
         "step" => 1
       })

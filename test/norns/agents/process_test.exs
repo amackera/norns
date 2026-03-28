@@ -107,7 +107,7 @@ defmodule Norns.Agents.ProcessTest do
               "type" => "tool_use",
               "id" => "call_1",
               "name" => "web_search",
-              "arguments" => %{"query" => "elixir programming"}
+              "input" => %{"query" => "elixir programming"}
             }
           ],
           stop_reason: "tool_use"
@@ -154,7 +154,7 @@ defmodule Norns.Agents.ProcessTest do
                 "type" => "tool_use",
                 "id" => "call_#{i}",
                 "name" => "web_search",
-                "arguments" => %{"query" => "query #{i}"}
+                "input" => %{"query" => "query #{i}"}
               }
             ],
             stop_reason: "tool_use"
