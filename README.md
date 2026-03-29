@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/norns-github-logo.png" alt="Norns" width="240" />
+  <img src="images/norns-github-logo.png" alt="Norns" width="400" />
 </p>
 
 <h1 align="center">Norns</h1>
