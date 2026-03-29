@@ -17,6 +17,7 @@ defmodule Norns.Agents.Process do
   alias Norns.Workers.WorkerRegistry
   alias Norns.Tools.{Idempotency, Tool}
   @tool_result_cap 200
+  @task_timeout_ms 300_000  # 5 minutes
 
   # -- Public API --
 
@@ -78,6 +79,7 @@ defmodule Norns.Agents.Process do
       pending_ask: nil,
       pending_llm_task: nil,
       pending_tool_tasks: nil,
+      task_timer: nil,
       resume_action: nil,
       test_pid: Keyword.get(opts, :test_pid)
     }
@@ -202,7 +204,8 @@ defmodule Norns.Agents.Process do
 
       {:ok, task_id} = WorkerRegistry.dispatch_llm_task(state.tenant_id, llm_task, from_pid: self())
 
-      {:noreply, %{state | status: :awaiting_llm, pending_llm_task: task_id}}
+      timer = Process.send_after(self(), {:task_timeout, task_id}, @task_timeout_ms)
+      {:noreply, %{state | status: :awaiting_llm, pending_llm_task: task_id, task_timer: timer}}
     end
   end
 
@@ -275,10 +278,13 @@ defmodule Norns.Agents.Process do
           {task_id, tc}
         end)
 
+      timer = Process.send_after(self(), {:task_timeout, :tools}, @task_timeout_ms)
+
       {:noreply,
        %{
          state
          | status: :awaiting_tools,
+           task_timer: timer,
            pending_tool_tasks: %{
              tasks: Map.new(pending_tools),
              results: %{},
@@ -331,7 +337,8 @@ defmodule Norns.Agents.Process do
 
   @impl true
   def handle_info({:task_result, task_id, result}, %{status: :awaiting_llm, pending_llm_task: task_id} = state) do
-    state = %{state | status: :running, pending_llm_task: nil}
+    cancel_timer(state.task_timer)
+    state = %{state | status: :running, pending_llm_task: nil, task_timer: nil}
 
     case result do
       {:ok, %{"finish_reason" => finish_reason, "usage" => usage} = resp} ->
@@ -395,12 +402,13 @@ defmodule Norns.Agents.Process do
         results = Map.put(pending.results, tc["id"], tool_msg)
 
         if map_size(remaining_tasks) == 0 do
-          # All tools done — collect results in original order and continue
+          # All tools done
+          cancel_timer(state.task_timer)
           maybe_invoke_test_hook(state, :after_tool_execution_before_result_persisted, %{results: Map.values(results), step: state.step})
 
           all_results = Map.values(results)
 
-          state = %{state | pending_tool_tasks: nil}
+          state = %{state | pending_tool_tasks: nil, task_timer: nil}
           handle_ask_or_continue(state, pending.ask_blocks, all_results, pending.log_calls?)
         else
           # Still waiting for more tools
@@ -409,6 +417,21 @@ defmodule Norns.Agents.Process do
         end
 
     end
+  end
+
+  def handle_info({:task_timeout, task_id}, %{pending_llm_task: task_id} = state) do
+    Logger.warning("LLM task #{task_id} timed out after #{@task_timeout_ms}ms")
+    handle_llm_error(state, {:timeout, "LLM task timed out — worker may have disconnected"})
+  end
+
+  def handle_info({:task_timeout, _task_id}, %{status: :awaiting_tools} = state) do
+    Logger.warning("Tool task timed out after #{@task_timeout_ms}ms")
+    {:noreply, complete_with_error(state, "Tool task timed out — worker may have disconnected")}
+  end
+
+  def handle_info({:task_timeout, _task_id}, state) do
+    # Stale timeout — task already completed
+    {:noreply, state}
   end
 
   def handle_info(:retry_llm, state) do
@@ -807,6 +830,9 @@ defmodule Norns.Agents.Process do
 
   defp append(run, {:ok, event}), do: Runs.append_event(run, event)
   defp append(_run, {:error, reason}), do: {:error, reason}
+
+  defp cancel_timer(nil), do: :ok
+  defp cancel_timer(ref), do: Process.cancel_timer(ref)
 
   defp maybe_invoke_test_hook(%{test_pid: nil}, _hook, _payload), do: :ok
 

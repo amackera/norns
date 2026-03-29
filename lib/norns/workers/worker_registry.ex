@@ -261,7 +261,18 @@ defmodule Norns.Workers.WorkerRegistry do
       {{tenant_id, worker_id} = key, _worker} ->
         Logger.info("Worker #{worker_id} disconnected from tenant #{tenant_id}")
         workers = Map.delete(state.workers, key)
-        {:noreply, %{state | workers: workers}}
+
+        # Fail all pending tasks that were dispatched to this worker
+        {failed, remaining} =
+          Map.split_with(state.pending, fn {_task_id, info} ->
+            info.tenant_id == tenant_id
+          end)
+
+        Enum.each(failed, fn {task_id, %{from_pid: pid}} ->
+          send(pid, {:task_result, task_id, {:error, "worker disconnected"}})
+        end)
+
+        {:noreply, %{state | workers: workers, pending: remaining}}
 
       nil ->
         {:noreply, state}
