@@ -58,7 +58,7 @@ defmodule NornsWeb.AgentLive do
     <div class="grid grid-cols-2 gap-4 mb-6">
       <div class="bg-gray-900 border border-gray-800 rounded p-4">
         <div class="text-xs text-gray-500 mb-1">System Prompt</div>
-        <div class="text-sm text-gray-300 whitespace-pre-wrap"><%= String.slice(@agent.system_prompt || "", 0, 300) %></div>
+        <div class="text-sm text-gray-300 whitespace-pre-wrap"><%= @agent.system_prompt %></div>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded p-4 space-y-2">
         <div>
