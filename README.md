@@ -19,17 +19,11 @@ docker compose run --rm -e POSTGRES_HOST=db app mix ecto.migrate
 docker compose up
 ```
 
-Open `http://localhost:4000` to set up a tenant and start experimenting.
-
-There's a durability demo you can run without an API key — it starts an agent, kills it mid-task, and resumes from the event log:
-
-```bash
-docker compose run --rm -e POSTGRES_HOST=db app mix demo.durability
-```
+Open `http://localhost:4000` to set up a tenant. Then connect a worker — see [norns-hello-agent](https://github.com/amackera/norns-hello-agent) for a minimal example.
 
 ## How it works
 
-The orchestrator is a state machine. It never calls an LLM or executes a tool — it dispatches tasks to workers and persists every step as an event. Workers do the actual work: making API calls, running your tool functions, talking to your databases.
+The orchestrator is a pure state machine. It never calls an LLM or executes a tool — it dispatches tasks to workers and persists every step as an event. Workers do all the actual work: making LLM API calls, running your tool functions, talking to your databases. You need at least one connected worker to do anything.
 
 ```
 Orchestrator                         Worker (your code)
@@ -43,11 +37,11 @@ Orchestrator                         Worker (your code)
   │  (checkpoint, repeat)                │
 ```
 
-A built-in DefaultWorker handles everything locally for development. For production, you run your own workers — Norns never touches your API keys or data.
+Workers connect via WebSocket, register their tools and LLM capability, and receive task pushes. Norns never touches your API keys or data.
 
 ### Example: Hello Agent
 
-[norns-hello-agent](https://github.com/amackera/norns-hello-agent) is a minimal Python worker that demonstrates tool calls. It defines a `say_hello` tool and connects to Norns as a worker — a good starting point for understanding the agent/worker model.
+[norns-hello-agent](https://github.com/amackera/norns-hello-agent) is a minimal Python worker that demonstrates tool calls. It defines a `say_hello` tool and connects to Norns — a good starting point for understanding the worker model.
 
 ## SDKs
 
@@ -126,10 +120,6 @@ See [norns-sdk-elixir](https://github.com/amackera/norns-sdk-elixir).
 
 **Conversations.** Agents can maintain context across messages, with automatic context window management. One agent can handle multiple concurrent conversations (e.g., different Slack channels).
 
-**Agent memory.** Key-value store shared across all conversations. What the agent learns in #engineering, it can recall in #product.
-
-**Human-in-the-loop.** The `ask_user` tool pauses the agent and waits for a human response. Fully durable — survives crashes while waiting.
-
 **Observability.** Every run has a full event timeline. Failed runs include error classification, retry decisions, and the last checkpoint. There's a LiveView dashboard for browsing it all.
 
 **Idempotent side effects.** Tools marked as side-effecting get deterministic idempotency keys. On replay, they're skipped instead of re-executed.
@@ -156,10 +146,9 @@ Norns.Supervisor
 ├── Repo (PostgreSQL)
 ├── PubSub
 ├── DynamicSupervisor
-│   ├── Agent processes (state machines)
-│   └── DefaultWorker (local LLM + tools)
-├── WorkerRegistry
-├── TaskQueue
+│   └── Agent processes (state machines)
+├── WorkerRegistry (tracks connected workers)
+├── TaskQueue (holds tasks for disconnected workers)
 └── Phoenix Endpoint (REST, WebSocket, LiveView)
 ```
 
