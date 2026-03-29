@@ -26,9 +26,9 @@ RUN mix phx.digest
 RUN mix release
 
 # Runtime stage
-FROM alpine:3.20 AS runtime
+FROM elixir:1.18-otp-27-alpine AS runtime
 
-RUN apk add --no-cache libstdc++ openssl ncurses-libs postgresql-client
+RUN apk add --no-cache libstdc++ ncurses-libs postgresql-client
 
 WORKDIR /app
 
