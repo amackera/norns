@@ -130,8 +130,11 @@ defmodule NornsWeb.RunLive do
     run = socket.assigns.run
     tenant = socket.assigns.tenant
 
-    # Stop the agent process if it's running
-    Norns.Agents.Registry.stop_agent(tenant.id, run.agent_id)
+    # Stop all agent processes for this agent (any conversation key)
+    Registry.select(Norns.AgentRegistry, [
+      {{{tenant.id, run.agent_id, :_}, :"$1", :_}, [], [:"$1"]}
+    ])
+    |> Enum.each(&DynamicSupervisor.terminate_child(Norns.AgentSupervisor, &1))
 
     # Mark the run as failed
     Norns.Runs.append_event(run, %{
