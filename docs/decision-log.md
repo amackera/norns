@@ -1,192 +1,95 @@
 # Decision Log
 
-Last updated: 2026-03-25
+Last updated: 2026-03-29
 
 ## Product Decisions
 
-### Scope reset (execution reliability first)
-- Norns is framed as a reliable execution layer, not a broad "agent OS".
-- Durable value focus:
-  1. correctness under failure
-  2. operator control
-  3. queryable execution state without re-inference
-- Transcript persistence is often sufficient for simple single-agent flows; Norns focuses on production execution guarantees.
-- Worker-hosted execution remains deferred.
-- Broader framework/platform expansion is explicitly de-prioritized until reliability core is hardened.
+### Pure orchestrator — no execution
+- Norns is a state machine and event log. It never makes LLM calls or executes tools.
+- All execution happens on workers. You need a connected worker to do anything.
+- No built-in tools, no DefaultWorker, no memory layer. These belong in the SDK / user code.
+- The orchestrator's job: dispatch tasks, persist events, manage state, crash recovery.
 
-### Durable agent runtime on BEAM
-- Norns is an open-source (MIT), self-hostable, agent-native durable runtime
-- The gap: no MIT-licensed, self-hostable, agent-native durable runtime exists. Temporal is MIT but general-purpose and operationally heavy. Everything else is platform-locked or BSL.
-- BEAM is the differentiator: OTP supervisors, lightweight processes, built-in distribution, hot code reloading, GenServers as natural agent primitive
+### Workers own everything
+- Workers hold API keys, database credentials, tool implementations.
+- Workers connect outbound via WebSocket — works behind firewalls, no public endpoints needed.
+- Norns never sees user data or secrets.
+- Provider-neutral LLM format — the worker translates to/from whatever API it uses.
 
-### Self-hosted first, cloud as convenience
-- The framework builds trust and adoption as open source
-- Norns Cloud monetizes convenience (managed hosting, dashboard, observability)
-- Not "give us your AI brain" — more like "Heroku for your agent framework"
+### Inspired by Temporal
+- Worker/client split matches Temporal's model.
+- Orchestrator manages workflow state, workers execute activities.
+- Built for AI agents specifically — conversations, tool dispatch, LLM checkpointing.
 
-### Worker model, not HTTP callbacks
-- Norns never calls out to user code via HTTP
-- Workers make outbound persistent WebSocket connections to the runtime, register tools, receive tasks
-- Like Temporal's activity workers but with persistent connections instead of polling
-- Workers execute locally with full access to user's DBs, APIs, secrets
-- Self-hosted mode: worker and runtime share the same BEAM VM, tool calls are local function calls
-
-### Three tool layers
-- Built-in tools (ship with norns), user-defined tools (via SDK/worker), MCP tools (future)
-- From the agent's perspective all tools look identical: name, description, schema, execute
-- Durability wraps all tools uniformly: checkpoint before calling, persist result, skip on replay
-- Executor transparently handles local vs remote tools via `source` field on Tool struct
-
-### Don't build integrations
-- Use managed integration platforms (Nango, Composio) or plain HTTP
-- Build zero connectors until the core runtime is proven valuable
+### Multi-tenancy
+- Every table has `tenant_id` (NOT NULL, FK).
+- Agent names unique per tenant.
+- API keys per tenant.
+- Workers scoped to tenant.
 
 ---
 
 ## Implemented
 
-### Multi-tenancy from day one
-- Every table has `tenant_id` (NOT NULL, FK to tenants)
-- Agent names unique per tenant
-- API keys stored per tenant
+### Durable agent process
+- Agents run as GenServers under DynamicSupervisor.
+- States: idle → awaiting_llm → awaiting_tools → idle (or waiting for human input).
+- Every step persisted as a RunEvent before the next step executes.
+- State reconstruction from event log on crash recovery.
+- Orphan recovery on boot resumes interrupted runs.
 
-### Durable agent GenServer (Phase 1)
-- Agents run as GenServers (`Agents.Process`) under a DynamicSupervisor
-- LLM-tool loop: call LLM → if tool_use, execute tools → loop; if end_turn, complete
-- Every step persisted as a RunEvent BEFORE executing the next step
-- State reconstruction from events enables crash recovery
-- Orphan recovery on boot resumes interrupted runs
+### Orchestrator/worker split
+- Agent process dispatches all work via WorkerRegistry.
+- LLM tasks: `dispatch_llm_task` → worker calls LLM API → returns neutral response.
+- Tool tasks: `dispatch_task` → worker executes function → returns result.
+- Agent is never blocked — always responds to status queries, stop, messages.
+- TaskQueue holds tasks when no worker is connected, flushes on reconnect.
 
-### REST API + WebSocket channels (Phase 2)
-- Phoenix REST API: agent CRUD, start/stop, status, messaging, run history, conversations
-- Bearer token auth matching against tenant api_keys
-- Agent WebSocket channel (`/socket`): real-time event streaming via PubSub
-- `send_message` auto-starts the agent process if not already running
-- All endpoints scoped to authenticated tenant
+### Provider-neutral LLM format
+- Tool calls: separate `tool_calls` array with `arguments`, not Anthropic content blocks.
+- Tool results: `role: "tool"` messages with `tool_call_id`, not content blocks in user messages.
+- `finish_reason`: `stop` / `tool_call` / `length` — not Anthropic-specific values.
+- `Norns.LLM.Format` translates neutral ↔ Anthropic at the worker boundary.
 
-### AgentDef + configurable policies (Phase 3)
-- `AgentDef` struct: model, system_prompt, mode, tools, checkpoint_policy, max_steps, on_failure, context_strategy, context_window
-- `AgentDef.from_agent/2` builds from Agent schema, reads all config from model_config map
-- Checkpoint policies: `:every_step`, `:on_tool_call` (default), `:manual`
-- Failure recovery: `:stop` (default) or `:retry_last_step` (exponential backoff, max 3 retries)
-- Rate limits (429) get longer backoff: 15s base, up to 10 retries
-- Retry events logged for observability
+### Conversations
+- Task mode (default): each message starts fresh.
+- Conversation mode: persistent history across runs, identified by external key.
+- Sliding window context management.
+- Multiple concurrent conversations per agent.
 
-### Module-based tool definitions (Phase 3)
-- `Norns.Tools.Behaviour` with callbacks: `name/0`, `description/0`, `input_schema/0`, `execute/1`
-- `use Norns.Tools.Behaviour` macro auto-generates `__tool__/0` returning a `%Tool{}` struct
-- ETS-backed `Tools.Registry` for built-in tools, auto-registered on boot
+### Runtime contracts
+- All events versioned (`schema_version: 1`) and validated before persistence.
+- 5-class error taxonomy with deterministic retry policy.
+- Idempotent side effects via deterministic keys.
+- Failure inspector: error_class, error_code, retry_decision, last checkpoint/event.
+- Replay conformance test suite.
 
-### Built-in tools
-- `web_search` — DuckDuckGo HTML search, parsed with Floki, returns top 5 results
-- `http_request` — GET/POST via Req, HTML stripped to text, body truncated to 1.5K chars
-- `shell` — execute allowlisted commands with 30s timeout
-- `ask_user` — interrupt/resume for human-in-the-loop (agent pauses, surfaces question, waits)
-- `store_memory` — persist a fact to agent memory (upsert by key)
-- `search_memory` — keyword search across agent memory
+### API + Dashboard
+- REST API with bearer token auth, returns run_id from send_message.
+- WebSocket channels for real-time events and worker connections.
+- LiveView dashboard: agent list, agent detail with config editing, run timeline with event details, cancel/retry buttons.
 
-### Worker protocol (Phase 4)
-- Worker WebSocket at `/worker` with tenant token auth
-- Workers join `"worker:lobby"` with worker_id and tool definitions
-- `WorkerRegistry` GenServer tracks connected workers, their tools, and pending tasks
-- Server pushes `tool_task` to workers via channel; workers reply with `tool_result`
-- `TaskQueue` GenServer holds tasks when no worker available, flushes on reconnect
-- Worker disconnect detected via process monitoring; cleanup automatic
-
-### Task vs conversation mode (Phase 5)
-- `:task` mode (default): each message starts fresh, no memory between runs
-- `:conversation` mode: persistent message history across runs, identified by external key
-- Registry key: `{tenant_id, agent_id, conversation_key}` — supports concurrent conversations per agent
-- Sliding window context management (configurable window size, default 20 messages)
-- Conversation summary prepended to system prompt if present
-- Conversations persisted to `conversations` table on run completion
-- Crash recovery loads conversation from DB, then replays run events on top
-
-### Agent memory (Phase 5)
-- `memories` table: agent_id, key (unique per agent), content, metadata
-- `store_memory` tool — agent decides what's worth remembering
-- `search_memory` tool — keyword search on key + content via ILIKE
-- Memory is shared across all conversations for an agent
-- System prompt auto-appended with memory instructions when memory tools are available
-
-### Human-in-the-loop (Phase 5)
-- `ask_user` tool intercepted by Process before reaching Executor
-- Regular tool calls in the same response execute first, then agent pauses
-- Run status transitions: running → waiting → running → completed
-- `waiting_for_user` and `user_response` event types in the audit log
-- Fully durable: crash while waiting resumes to waiting state
-
-### LiveView dashboard (Phase 6)
-- `/` — agents list with live status badges, start/stop, create agent form
-- `/agents/:id` — agent detail, message input, live event stream, run history
-- `/runs/:id` — run timeline with color-coded events and payload details
-- `/tools` — built-in and worker-provided tools
-- `/setup` — tenant creation with auto-generated API key
-- Session auth via cookie; first visit redirects to setup if no tenants exist
-- Real-time updates via PubSub subscriptions in LiveView mount
-
-### LLM module with swappable backends
-- `Norns.LLM` dispatches to configured backend via behaviour
-- `Norns.LLM.Anthropic` — multi-turn Messages API with tool use support
-- `Norns.LLM.Fake` — ETS-backed scripted responses + call recording for tests
-- Current date auto-injected into system prompt
-- Old tool results compacted to 200 chars before sending to LLM (token management)
-
-### Runtime contracts (Phase 7)
-- All events versioned (`schema_version: 1`) and validated via `Norns.Runtime.Events` before persistence
-- 5-class error taxonomy with deterministic retry policy (`Norns.Runtime.ErrorPolicy`)
-- Idempotent side effects: deterministic keys prevent duplicate execution under replay/retry
-- Tools can declare `side_effect?: true` via behaviour callback
-- Failure inspector: `failure_metadata` on runs + structured API response for operator diagnosis
-- Replay conformance test suite proves checkpoint/restore invariants
-
-### Orchestrator/Worker split (Phase 8)
-- The agent GenServer is now a pure state machine — dispatches tasks, never executes
-- All LLM calls dispatched via `WorkerRegistry.dispatch_llm_task` → worker handles API call
-- All tool calls dispatched via `WorkerRegistry.dispatch_task` → worker handles execution
-- Agent states: `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:waiting`
-- Agent is never blocked — always responds to get_state, stop, messages
-- `DefaultWorker` runs in same BEAM VM for self-hosted mode (handles LLM + built-in tools)
-- External workers connect via `/worker` WebSocket, register capabilities `[:llm, :tools]`
-- Rate limits are the worker's problem — orchestrator never sees a 429
-- Workers hold API keys — orchestrator never sees them in external mode
-
-### Docker Compose for all dev tooling
-- No local Elixir install. `Dockerfile.dev` + app service in docker-compose
+### SDKs
+- Python SDK: worker (`Norns`) + client (`NornsClient`). 29 tests.
+- Elixir SDK: worker (`NornsSdk.Worker`) + client (`NornsSdk.Client`). 10 tests.
 
 ---
 
 ## Open
 
-### A) SDK design (Phase 9, in progress)
-- Temporal-style client/worker split: `Norns` (worker) and `NornsClient` (client)
-- Python worker implemented: `@tool` decorator, `Agent` class, WebSocket worker, auto-reconnect
-- Python client next: `send_message(wait=True)`, run queries, event streaming
-- TypeScript SDK to follow with equivalent API
-- Server-side needed: return `run_id` in send_message 202 response
-- See `docs/plan-sdk-design.md`
+### SDK maturity
+- Python SDK needs end-to-end integration test against running Norns.
+- Elixir SDK needs the same.
+- Neither published to PyPI/Hex yet.
 
-### B) LLM provider abstraction
-- Currently Anthropic-only via behaviour pattern
-- Add OpenAI implementation when needed
+### Multi-node
+- Registry + DynamicSupervisor are single-node.
+- Port to Horde when clustering is needed.
 
-### C) Vector memory
-- Currently keyword search via ILIKE
-- pgvector for semantic search, embeddings computed on store_memory
+### Policy enforcement
+- Pre-dispatch hook point in the orchestrator (not built, architecture supports it).
+- Rule-based (orchestrator evaluates) and LLM-evaluated (worker evaluates) flavors.
 
-### D) Multi-node distribution
-- Current Registry + DynamicSupervisor are single-node
-- Port to Horde for multi-node when clustering is needed
-- PubSub already supports distributed Erlang or Redis backend
-
-### E) Context summarization
-- Currently sliding window only (discard old messages)
-- Future: LLM-powered summarization of old context into a paragraph
-
-### F) Policy enforcement (pre-dispatch hook)
-- Natural enforcement point between "LLM decided to call a tool" and "tool dispatched to worker"
-- Design: ship a hook, not a built-in engine. One `pre_dispatch` field on AgentDef, one behaviour callback
-- Two flavors: rule-based (orchestrator evaluates, fast) and LLM-evaluated (worker evaluates, slower)
-- Policies defined in user code via SDK, registered alongside tools on worker connect
-- Policy violations use existing interrupt/resume (`ask_user`) mechanism
-- Decision: don't build until someone asks. The architecture supports it when needed.
+### Multi-agent orchestration
+- Agents as tools pattern (supervisor agent calls sub-agents).
+- `parent_run_id` for run lineage tracking (not built).

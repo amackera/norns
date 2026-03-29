@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  MIX_ENV: test
+  POSTGRES_USER: norns
+  POSTGRES_PASSWORD: norns
+  POSTGRES_DB: norns_test
+  POSTGRES_HOST: localhost
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: norns
+          POSTGRES_PASSWORD: norns
+          POSTGRES_DB: norns_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U norns -d norns_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run migrations
+        run: mix ecto.create && mix ecto.migrate
+
+      - name: Run tests
+        run: mix test --exclude external
