@@ -236,8 +236,11 @@ defmodule Norns.Agents.Process do
   end
 
   defp dispatch_tool_execution(state, tool_use_blocks, log_calls?) do
+    {wait_blocks, remaining} =
+      Enum.split_with(tool_use_blocks, fn block -> block["name"] == "wait" end)
+
     {ask_blocks, regular_blocks} =
-      Enum.split_with(tool_use_blocks, fn block -> block["name"] == "ask_user" end)
+      Enum.split_with(remaining, fn block -> block["name"] == "ask_user" end)
 
     # Log tool_call events (orchestrator's job)
     if log_calls? do
@@ -264,7 +267,7 @@ defmodule Norns.Agents.Process do
     maybe_invoke_test_hook(state, :after_tool_call_persisted, %{blocks: regular_blocks, step: state.step})
 
     if regular_blocks == [] do
-      handle_ask_or_continue(state, ask_blocks, [], log_calls?)
+      handle_wait_ask_or_continue(state, wait_blocks, ask_blocks, [], log_calls?)
     else
       pending_tools =
         Enum.map(regular_blocks, fn tc ->
@@ -288,6 +291,7 @@ defmodule Norns.Agents.Process do
            pending_tool_tasks: %{
              tasks: Map.new(pending_tools),
              results: %{},
+             wait_blocks: wait_blocks,
              ask_blocks: ask_blocks,
              log_calls?: log_calls?
            }
@@ -295,21 +299,53 @@ defmodule Norns.Agents.Process do
     end
   end
 
-  defp handle_ask_or_continue(state, ask_blocks, regular_results, log_calls?) do
-    case ask_blocks do
-      [ask_block | _] ->
+  defp handle_wait_ask_or_continue(state, wait_blocks, ask_blocks, regular_results, log_calls?) do
+    # Priority: wait > ask_user > continue
+    cond do
+      wait_blocks != [] ->
+        [wait_block | _] = wait_blocks
+        seconds = get_in(wait_block, ["arguments", "seconds"]) || 0
+        seconds = if is_binary(seconds), do: String.to_integer(seconds), else: seconds
+        reason = get_in(wait_block, ["arguments", "reason"]) || "Agent requested a delay"
+
+        if log_calls? do
+          append(state.run, Events.tool_call(%{
+            "tool_call_id" => wait_block["id"],
+            "name" => "wait",
+            "arguments" => wait_block["arguments"],
+            "step" => state.step
+          }))
+        end
+
+        append(state.run, %{
+          event_type: "waiting_for_timer",
+          payload: %{
+            "tool_call_id" => wait_block["id"],
+            "seconds" => seconds,
+            "reason" => reason,
+            "step" => state.step,
+            "schema_version" => 1
+          }
+        })
+
+        broadcast(state, :waiting_timer, %{seconds: seconds, reason: reason})
+
+        # Build the tool result that will be delivered when the timer fires
+        timer_ref = Process.send_after(self(), {:timer_complete, wait_block["id"], regular_results, ask_blocks, log_calls?}, seconds * 1000)
+
+        {:noreply, %{state | status: :waiting_timer, task_timer: timer_ref}}
+
+      ask_blocks != [] ->
+        [ask_block | _] = ask_blocks
         question = get_in(ask_block, ["arguments", "question"]) || "What would you like me to do?"
 
         if log_calls? do
-          append(
-            state.run,
-            Events.tool_call(%{
-              "tool_call_id" => ask_block["id"],
-              "name" => "ask_user",
-              "arguments" => ask_block["arguments"],
-              "step" => state.step
-            })
-          )
+          append(state.run, Events.tool_call(%{
+            "tool_call_id" => ask_block["id"],
+            "name" => "ask_user",
+            "arguments" => ask_block["arguments"],
+            "step" => state.step
+          }))
         end
 
         append(state.run, Events.waiting_for_user(%{"question" => question, "tool_call_id" => ask_block["id"], "step" => state.step}))
@@ -327,7 +363,7 @@ defmodule Norns.Agents.Process do
              }
          }}
 
-      [] ->
+      true ->
         messages = state.messages ++ regular_results
         state = %{state | messages: messages, status: :running}
         state = maybe_checkpoint(state, :tool_result)
@@ -409,7 +445,7 @@ defmodule Norns.Agents.Process do
           all_results = Map.values(results)
 
           state = %{state | pending_tool_tasks: nil, task_timer: nil}
-          handle_ask_or_continue(state, pending.ask_blocks, all_results, pending.log_calls?)
+          handle_wait_ask_or_continue(state, pending.wait_blocks || [], pending.ask_blocks, all_results, pending.log_calls?)
         else
           # Still waiting for more tools
           updated_pending = %{pending | tasks: remaining_tasks, results: results}
@@ -417,6 +453,35 @@ defmodule Norns.Agents.Process do
         end
 
     end
+  end
+
+  def handle_info({:timer_complete, tool_call_id, pending_results, ask_blocks, log_calls?}, %{status: :waiting_timer} = state) do
+    # Timer fired — deliver the wait tool result and continue
+    wait_result = %{
+      role: "tool",
+      tool_call_id: tool_call_id,
+      name: "wait",
+      content: "Timer completed."
+    }
+
+    append(state.run, %{
+      event_type: "tool_result",
+      payload: %{
+        "tool_call_id" => tool_call_id,
+        "name" => "wait",
+        "content" => "Timer completed.",
+        "is_error" => false,
+        "step" => state.step,
+        "schema_version" => 1
+      }
+    })
+
+    broadcast(state, :tool_result, %{tool_call_id: tool_call_id, name: "wait", content: "Timer completed."})
+
+    all_results = pending_results ++ [wait_result]
+    state = %{state | task_timer: nil}
+
+    handle_wait_ask_or_continue(state, [], ask_blocks, all_results, log_calls?)
   end
 
   def handle_info({:task_timeout, task_id}, %{pending_llm_task: task_id} = state) do
@@ -793,6 +858,10 @@ defmodule Norns.Agents.Process do
 
           "tool_duplicate" ->
             {msgs, current_step, ask_state, remove_pending_tool_call(pending_calls, event.payload["tool_call_id"])}
+
+          "waiting_for_timer" ->
+            # Timer was pending — will be re-scheduled on resume
+            {msgs, current_step, ask_state, pending_calls}
 
           "waiting_for_user" ->
             pending_ask = %{
