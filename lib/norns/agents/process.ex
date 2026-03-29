@@ -51,7 +51,9 @@ defmodule Norns.Agents.Process do
 
     agent_def =
       Keyword.get_lazy(opts, :agent_def, fn ->
-        tools = Keyword.get(opts, :tools, [])
+        explicit_tools = Keyword.get(opts, :tools, [])
+        worker_tools = WorkerRegistry.available_tools(tenant_id)
+        tools = explicit_tools ++ worker_tools
         max_steps = Keyword.get(opts, :max_steps)
 
         def_opts = [tools: tools]
@@ -165,7 +167,11 @@ defmodule Norns.Agents.Process do
     else
       state = %{state | step: state.step + 1}
 
-      tools = Enum.map(state.agent_def.tools, &Tool.to_api_format/1)
+      # Resolve tools at dispatch time: agent_def tools + worker-registered tools
+      agent_tools = state.agent_def.tools
+      worker_tools = WorkerRegistry.available_tools(state.tenant_id)
+      all_tools = (agent_tools ++ worker_tools) |> Enum.uniq_by(& &1.name)
+      tools = Enum.map(all_tools, &Tool.to_api_format/1)
 
       messages_for_llm =
         state
@@ -590,7 +596,6 @@ defmodule Norns.Agents.Process do
   defp build_system_prompt(state) do
     state.agent_def.system_prompt
     |> maybe_append_summary(state)
-    |> maybe_append_memory_instructions(state)
     |> Kernel.<>("\n\nCurrent date: #{Date.utc_today()}.")
   end
 
@@ -600,18 +605,6 @@ defmodule Norns.Agents.Process do
   end
 
   defp maybe_append_summary(prompt, _state), do: prompt
-
-  defp maybe_append_memory_instructions(prompt, state) do
-    tool_names = Enum.map(state.agent_def.tools, & &1.name)
-
-    if "store_memory" in tool_names and "search_memory" in tool_names do
-      prompt <>
-        "\n\nYou have a persistent memory shared across conversations. " <>
-        "Use search_memory to recall facts before answering and store_memory to save durable facts, decisions, and events."
-    else
-      prompt
-    end
-  end
 
   defp load_conversation_state(%{agent_def: %{mode: :conversation}} = state) do
     if state.conversation do

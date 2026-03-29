@@ -5,7 +5,6 @@ defmodule Norns.Runtime.EventTimelineTest do
   alias Norns.Agents.Process, as: AgentProcess
   alias Norns.LLM.Fake
   alias Norns.Runs
-  alias Norns.Tools.WebSearch
 
   describe "event timeline consistency" do
     test "simple run produces expected event sequence", %{} do
@@ -55,7 +54,7 @@ defmodule Norns.Runtime.EventTimelineTest do
       ])
 
       Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent.id}")
-      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id, tools: [WebSearch.tool()])
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
       AgentProcess.send_message(pid, "Search")
 
       receive do

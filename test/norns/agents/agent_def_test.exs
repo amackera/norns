@@ -2,7 +2,7 @@ defmodule Norns.Agents.AgentDefTest do
   use Norns.DataCase, async: true
 
   alias Norns.Agents.AgentDef
-  alias Norns.Tools.{Tool, WebSearch}
+  alias Norns.Tools.Tool
 
   describe "new/1" do
     test "builds a valid definition with documented defaults" do
@@ -93,24 +93,15 @@ defmodule Norns.Agents.AgentDefTest do
       assert agent_def.tools == []
     end
 
-    test "includes tool modules" do
-      tenant = create_tenant()
-      agent = create_agent(tenant)
-
-      agent_def = AgentDef.from_agent(agent, tool_modules: [WebSearch])
-
-      assert length(agent_def.tools) == 1
-      assert hd(agent_def.tools).name == "web_search"
-    end
-
     test "includes raw tool structs" do
       tenant = create_tenant()
       agent = create_agent(tenant)
 
-      tool = WebSearch.__tool__()
+      tool = %Tool{name: "echo", description: "Echo", input_schema: %{}, handler: fn _ -> {:ok, "ok"} end}
       agent_def = AgentDef.from_agent(agent, tools: [tool])
 
       assert length(agent_def.tools) == 1
+      assert hd(agent_def.tools).name == "echo"
     end
 
     test "reads checkpoint_policy from model_config" do

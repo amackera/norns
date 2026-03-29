@@ -1,15 +1,10 @@
-defmodule Norns.Workers.DefaultWorker do
+defmodule Norns.TestWorker do
   @moduledoc """
-  Built-in worker that runs in the same BEAM VM as the orchestrator.
-  Handles LLM calls and built-in tool execution.
-
-  Receives tasks in neutral format, translates to Anthropic API for LLM calls,
-  and returns results in neutral format.
+  Test worker that registers with WorkerRegistry and handles LLM + tool tasks
+  using the Fake LLM. Started in test setup, not in the application supervisor.
   """
 
   use GenServer
-
-  require Logger
 
   alias Norns.LLM
   alias Norns.LLM.Format
@@ -21,8 +16,8 @@ defmodule Norns.Workers.DefaultWorker do
   end
 
   @impl true
-  def init(_opts) do
-    tools = Norns.Tools.Registry.all_tools()
+  def init(opts) do
+    tools = Keyword.get(opts, :tools, [])
 
     tool_defs =
       Enum.map(tools, fn tool ->
@@ -36,7 +31,7 @@ defmodule Norns.Workers.DefaultWorker do
 
     WorkerRegistry.register_worker(
       :default,
-      "default-worker",
+      "test-worker",
       self(),
       tool_defs,
       capabilities: [:llm, :tools]
@@ -71,9 +66,6 @@ defmodule Norns.Workers.DefaultWorker do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # -- LLM Execution --
-  # Receives neutral format, translates to Anthropic API, returns neutral format
-
   defp execute_llm(task) do
     api_key = task.api_key
     model = task.model
@@ -81,16 +73,12 @@ defmodule Norns.Workers.DefaultWorker do
     messages = task.messages
     tools = task[:tools] || []
 
-    # Translate neutral → Anthropic format for the API call
     anthropic_messages = Format.to_anthropic_messages(messages)
     anthropic_tools = if tools != [], do: Format.to_anthropic_tools(tools), else: []
-
     opts = if anthropic_tools != [], do: [tools: anthropic_tools], else: []
 
     case LLM.chat(api_key, model, system_prompt, anthropic_messages, opts) do
       {:ok, response} ->
-        # Translate Anthropic response → neutral format
-        # LLM.chat returns a struct with .content (list), .stop_reason, .usage
         anthropic_body = %{
           "content" => response.content,
           "stop_reason" => response.stop_reason,
@@ -107,8 +95,6 @@ defmodule Norns.Workers.DefaultWorker do
         %{"status" => "error", "error" => reason}
     end
   end
-
-  # -- Tool Execution --
 
   defp execute_tool(task, tools) do
     tool_name = task[:tool_name] || task["tool_name"]

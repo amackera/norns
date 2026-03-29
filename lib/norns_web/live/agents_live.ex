@@ -185,8 +185,7 @@ defmodule NornsWeb.AgentsLive do
   def handle_event("start", %{"id" => id}, socket) do
     agent_id = String.to_integer(id)
     tenant = socket.assigns.tenant
-    tools = Norns.Tools.Registry.all_tools()
-    Registry.start_agent(agent_id, tenant.id, tools: tools)
+    Registry.start_agent(agent_id, tenant.id)
     Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent_id}")
     {:noreply, refresh(socket)}
   end

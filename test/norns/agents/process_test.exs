@@ -4,7 +4,6 @@ defmodule Norns.Agents.ProcessTest do
   alias Norns.{Conversations, Runs}
   alias Norns.Agents.Process, as: AgentProcess
   alias Norns.LLM.Fake
-  alias Norns.Tools.WebSearch
 
   setup do
     tenant = create_tenant()
@@ -122,7 +121,7 @@ defmodule Norns.Agents.ProcessTest do
         AgentProcess.start_link(
           agent_id: agent.id,
           tenant_id: tenant.id,
-          tools: [WebSearch.tool()]
+          
         )
 
       subscribe_and_send(pid, agent.id, "Tell me about Elixir")
@@ -167,7 +166,6 @@ defmodule Norns.Agents.ProcessTest do
         AgentProcess.start_link(
           agent_id: agent.id,
           tenant_id: tenant.id,
-          tools: [WebSearch.tool()],
           max_steps: 3
         )
 

@@ -22,21 +22,7 @@ defmodule Norns.Application do
 
     case result do
       {:ok, _pid} ->
-        # Init tool registry and register built-in tools
         Norns.Tools.Registry.init()
-        Norns.Tools.Registry.register(Norns.Tools.WebSearch)
-        Norns.Tools.Registry.register(Norns.Tools.Http)
-        Norns.Tools.Registry.register(Norns.Tools.Shell)
-        Norns.Tools.Registry.register(Norns.Tools.AskUser)
-        Norns.Tools.Registry.register(Norns.Tools.StoreMemory)
-        Norns.Tools.Registry.register(Norns.Tools.SearchMemory)
-
-        # Start the default worker (handles LLM calls + built-in tools locally)
-        DynamicSupervisor.start_child(
-          Norns.AgentSupervisor,
-          {Norns.Workers.DefaultWorker, []}
-        )
-
         Norns.Workers.ResumeAgents.resume_orphans()
         result
 
