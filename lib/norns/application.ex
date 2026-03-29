@@ -23,11 +23,33 @@ defmodule Norns.Application do
     case result do
       {:ok, _pid} ->
         Norns.Tools.Registry.init()
+        maybe_create_default_tenant()
         Norns.Workers.ResumeAgents.resume_orphans()
         result
 
       other ->
         other
+    end
+  end
+
+  defp maybe_create_default_tenant do
+    case System.get_env("NORNS_DEFAULT_TENANT_KEY") do
+      nil ->
+        :ok
+
+      key when is_binary(key) and key != "" ->
+        case Norns.Tenants.get_tenant_by_slug("default") do
+          %Norns.Tenants.Tenant{} ->
+            :ok
+
+          nil ->
+            {:ok, _tenant} =
+              Norns.Tenants.create_tenant(%{
+                name: "Default",
+                slug: "default",
+                api_keys: %{"norns" => key}
+              })
+        end
     end
   end
 end
