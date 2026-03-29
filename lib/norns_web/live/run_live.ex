@@ -214,9 +214,12 @@ defmodule NornsWeb.RunLive do
   defp event_type_color("agent_started"), do: "text-gray-400"
   defp event_type_color(_), do: "text-gray-500"
 
+  defp event_summary(%{event_type: "llm_response", payload: %{"finish_reason" => fr}}), do: fr
   defp event_summary(%{event_type: "llm_response", payload: %{"stop_reason" => sr}}), do: sr
   defp event_summary(%{event_type: "tool_call", payload: %{"name" => name}}), do: name
-  defp event_summary(%{event_type: "tool_result", payload: %{"tool_use_id" => id}}), do: id
+  defp event_summary(%{event_type: "tool_result", payload: %{"name" => name}}), do: name
+  defp event_summary(%{event_type: "tool_result", payload: %{"tool_call_id" => id}}), do: id
+  defp event_summary(%{event_type: "tool_duplicate", payload: %{"tool_call_id" => id}}), do: id
   defp event_summary(%{event_type: "tool_duplicate", payload: %{"tool_use_id" => id}}), do: id
   defp event_summary(%{event_type: "checkpoint_saved", payload: %{"step" => s}}), do: "step #{s}"
   defp event_summary(%{event_type: "checkpoint", payload: %{"step" => s}}), do: "step #{s}"
@@ -227,10 +230,46 @@ defmodule NornsWeb.RunLive do
   defp event_summary(%{event_type: "user_response", payload: %{"content" => c}}), do: String.slice(c, 0, 80)
   defp event_summary(_), do: ""
 
-  defp event_detail(%{event_type: "tool_call", payload: %{"input" => input}}), do: inspect(input, pretty: true, limit: 500)
+  defp event_detail(%{event_type: "llm_request", payload: payload}) do
+    step = payload["step"]
+    count = payload["message_count"]
+    "step #{step}, #{count} messages"
+  end
+
+  defp event_detail(%{event_type: "llm_response", payload: payload}) do
+    parts = []
+
+    # Token usage
+    parts =
+      case payload["usage"] do
+        %{"input_tokens" => i, "output_tokens" => o} when is_integer(i) and is_integer(o) ->
+          ["#{i} in / #{o} out tokens" | parts]
+        _ -> parts
+      end
+
+    # Text content
+    parts =
+      case payload["content"] do
+        c when is_binary(c) and c != "" -> [String.slice(c, 0, 500) | parts]
+        _ -> parts
+      end
+
+    # Tool calls
+    parts =
+      case payload["tool_calls"] do
+        calls when is_list(calls) and calls != [] ->
+          names = Enum.map_join(calls, ", ", &(&1["name"] || "?"))
+          ["tool calls: #{names}" | parts]
+        _ -> parts
+      end
+
+    Enum.reverse(parts) |> Enum.join("\n")
+  end
+
+  defp event_detail(%{event_type: "tool_call", payload: %{"arguments" => args}}) when is_map(args), do: inspect(args, pretty: true, limit: 500)
+  defp event_detail(%{event_type: "tool_call", payload: %{"input" => input}}) when is_map(input), do: inspect(input, pretty: true, limit: 500)
   defp event_detail(%{event_type: "tool_result", payload: %{"content" => c}}) when is_binary(c), do: String.slice(c, 0, 500)
   defp event_detail(%{event_type: "tool_duplicate", payload: %{"resolution" => resolution, "idempotency_key" => key}}), do: "#{resolution}: #{key}"
-  defp event_detail(%{event_type: "llm_response", payload: %{"usage" => %{"input_tokens" => i, "output_tokens" => o}}}), do: "#{i} in / #{o} out tokens"
   defp event_detail(%{event_type: "run_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 500)
   defp event_detail(%{event_type: "run_failed", payload: %{"error" => e}}), do: e
   defp event_detail(%{event_type: "agent_completed", payload: %{"output" => o}}), do: String.slice(o || "", 0, 500)
