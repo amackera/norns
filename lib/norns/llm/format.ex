@@ -82,27 +82,33 @@ defmodule Norns.LLM.Format do
   defp convert_chunk_to_anthropic(msgs) do
     case msgs do
       [%{role: "tool"} | _] = tool_msgs ->
-        # Group consecutive tool messages into a single user message with tool_result blocks
-        tool_results =
-          Enum.map(tool_msgs, fn msg ->
-            result = %{
-              "type" => "tool_result",
-              "tool_use_id" => msg[:tool_call_id] || msg["tool_call_id"],
-              "content" => msg[:content] || msg["content"]
-            }
+        convert_tool_chunk(tool_msgs)
 
-            if msg[:is_error] || msg["is_error"] do
-              Map.put(result, "is_error", true)
-            else
-              result
-            end
-          end)
-
-        [%{"role" => "user", "content" => tool_results}]
+      [%{"role" => "tool"} | _] = tool_msgs ->
+        convert_tool_chunk(tool_msgs)
 
       other_msgs ->
         Enum.map(other_msgs, &convert_msg_to_anthropic/1)
     end
+  end
+
+  defp convert_tool_chunk(tool_msgs) do
+    tool_results =
+      Enum.map(tool_msgs, fn msg ->
+        result = %{
+          "type" => "tool_result",
+          "tool_use_id" => msg[:tool_call_id] || msg["tool_call_id"],
+          "content" => msg[:content] || msg["content"]
+        }
+
+        if msg[:is_error] || msg["is_error"] do
+          Map.put(result, "is_error", true)
+        else
+          result
+        end
+      end)
+
+    [%{"role" => "user", "content" => tool_results}]
   end
 
   defp convert_msg_to_anthropic(%{role: "assistant"} = msg) do
