@@ -164,18 +164,8 @@ defmodule NornsWeb.AgentLive do
     </div>
 
     <%!-- Controls --%>
-    <div class="flex items-center gap-3 mb-6">
-      <%= if @state && @state.status not in [:stopped] do %>
-        <button phx-click="stop" class="text-xs text-red-400 hover:text-red-300 border border-red-900 px-3 py-1.5 rounded">
-          stop
-        </button>
-      <% else %>
-        <button phx-click="start" class="text-xs text-green-400 hover:text-green-300 border border-green-900 px-3 py-1.5 rounded">
-          start
-        </button>
-      <% end %>
-
-      <%= if @state && @state.status not in [:stopped, :waiting] do %>
+    <%= if @state == nil or @state.status not in [:waiting] do %>
+      <div class="flex items-center gap-3 mb-6">
         <form phx-submit="send_message" class="flex items-center gap-2 flex-1">
           <input type="text" name="content" value={@message} placeholder="Send a message..."
             class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-gray-500" />
@@ -183,8 +173,8 @@ defmodule NornsWeb.AgentLive do
             send
           </button>
         </form>
-      <% end %>
-    </div>
+      </div>
+    <% end %>
 
     <%!-- Waiting for user response --%>
     <%= if @state && @state.status == :waiting do %>
@@ -281,22 +271,6 @@ defmodule NornsWeb.AgentLive do
       {:error, _changeset} ->
         {:noreply, socket |> put_flash(:error, "Failed to save configuration")}
     end
-  end
-
-  def handle_event("start", _params, socket) do
-    agent = socket.assigns.agent
-    tenant = socket.assigns.tenant
-    Registry.start_agent(agent.id, tenant.id)
-    Process.sleep(50)
-    {:noreply, assign(socket, state: get_process_state(tenant.id, agent.id))}
-  end
-
-  def handle_event("stop", _params, socket) do
-    agent = socket.assigns.agent
-    tenant = socket.assigns.tenant
-    Registry.stop_agent(tenant.id, agent.id)
-    Process.sleep(50)
-    {:noreply, assign(socket, state: get_process_state(tenant.id, agent.id))}
   end
 
   def handle_event("send_message", %{"content" => content}, socket) when content != "" do

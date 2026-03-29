@@ -128,22 +128,9 @@ defmodule NornsWeb.AgentsLive do
                 </a>
                 <span class="text-xs text-gray-600"><%= agent.model %></span>
               </div>
-              <div class="flex items-center gap-3">
-                <span class="text-xs text-gray-500">
-                  <%= if state && state.status == :running, do: "step #{state.step}", else: agent.status %>
-                </span>
-                <%= if state && state.status != :stopped do %>
-                  <button phx-click="stop" phx-value-id={agent.id}
-                    class="text-xs text-red-400 hover:text-red-300 border border-red-900 px-2 py-1 rounded">
-                    stop
-                  </button>
-                <% else %>
-                  <button phx-click="start" phx-value-id={agent.id}
-                    class="text-xs text-green-400 hover:text-green-300 border border-green-900 px-2 py-1 rounded">
-                    start
-                  </button>
-                <% end %>
-              </div>
+              <span class="text-xs text-gray-500">
+                <%= if state && state.status not in [:stopped, :idle, nil], do: "step #{state.step}", else: agent.status %>
+              </span>
             </div>
           <% end %>
         </div>
@@ -180,20 +167,6 @@ defmodule NornsWeb.AgentsLive do
 
         {:noreply, assign(socket, create_error: error)}
     end
-  end
-
-  def handle_event("start", %{"id" => id}, socket) do
-    agent_id = String.to_integer(id)
-    tenant = socket.assigns.tenant
-    Registry.start_agent(agent_id, tenant.id)
-    Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent_id}")
-    {:noreply, refresh(socket)}
-  end
-
-  def handle_event("stop", %{"id" => id}, socket) do
-    agent_id = String.to_integer(id)
-    Registry.stop_agent(socket.assigns.tenant.id, agent_id)
-    {:noreply, refresh(socket)}
   end
 
   @impl true

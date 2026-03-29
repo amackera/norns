@@ -52,42 +52,6 @@ defmodule NornsWeb.AgentControllerTest do
     end
   end
 
-  describe "POST /api/v1/agents/:id/start" do
-    test "starts an agent process", %{conn: conn, tenant: tenant} do
-      agent = create_agent(tenant)
-      conn = post(conn, "/api/v1/agents/#{agent.id}/start")
-      assert %{"status" => "started"} = json_response(conn, 200)
-
-      # Cleanup
-      Norns.Agents.Registry.stop_agent(tenant.id, agent.id)
-    end
-
-    test "returns 409 if already running", %{conn: conn, tenant: tenant} do
-      agent = create_agent(tenant)
-      Norns.Agents.Registry.start_agent(agent.id, tenant.id)
-
-      conn = post(conn, "/api/v1/agents/#{agent.id}/start")
-      assert %{"error" => "agent already running"} = json_response(conn, 409)
-
-      Norns.Agents.Registry.stop_agent(tenant.id, agent.id)
-    end
-  end
-
-  describe "DELETE /api/v1/agents/:id/stop" do
-    test "stops a running agent", %{conn: conn, tenant: tenant} do
-      agent = create_agent(tenant)
-      Norns.Agents.Registry.start_agent(agent.id, tenant.id)
-
-      conn = delete(conn, "/api/v1/agents/#{agent.id}/stop")
-      assert %{"status" => "stopped"} = json_response(conn, 200)
-    end
-
-    test "returns 404 if not running", %{conn: conn, tenant: tenant} do
-      agent = create_agent(tenant)
-      conn = delete(conn, "/api/v1/agents/#{agent.id}/stop")
-      assert %{"error" => "agent not running"} = json_response(conn, 404)
-    end
-  end
 
   describe "GET /api/v1/agents/:id/status" do
     test "returns running status", %{conn: conn, tenant: tenant} do

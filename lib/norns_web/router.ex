@@ -30,10 +30,8 @@ defmodule NornsWeb.Router do
     pipe_through :api
 
     resources "/agents", AgentController, only: [:create, :index, :show] do
-      post "/start", AgentController, :start
-      delete "/stop", AgentController, :stop
-      get "/status", AgentController, :status
       post "/messages", AgentController, :send_message
+      get "/status", AgentController, :status
       get "/runs", AgentController, :runs
       get "/conversations", ConversationController, :index
       get "/conversations/:key", ConversationController, :show

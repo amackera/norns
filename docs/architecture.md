@@ -31,7 +31,7 @@ Each agent is a GenServer managed by a DynamicSupervisor:
 - `:awaiting_tools` — dispatched tool tasks, waiting for results
 - `:waiting` — paused for human input (interrupt/resume)
 
-The agent is never blocked — it always responds to status queries and stop requests.
+The agent is never blocked — it always responds to status queries. Agent processes start automatically when a message is sent and stop when idle.
 
 ## Agent Modes
 

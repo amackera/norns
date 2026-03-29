@@ -31,34 +31,6 @@ defmodule NornsWeb.AgentController do
     end
   end
 
-  def start(conn, %{"agent_id" => agent_id}) do
-    tenant = conn.assigns.current_tenant
-
-    with {:ok, agent} <- fetch_agent(agent_id, tenant.id) do
-      case Registry.start_agent(agent.id, tenant.id) do
-        {:ok, _pid} ->
-          json(conn, %{status: "started"})
-
-        {:error, {:already_started, _}} ->
-          conn |> put_status(409) |> json(%{error: "agent already running"})
-
-        {:error, reason} ->
-          conn |> put_status(500) |> json(%{error: inspect(reason)})
-      end
-    end
-  end
-
-  def stop(conn, %{"agent_id" => agent_id}) do
-    tenant = conn.assigns.current_tenant
-
-    with {:ok, agent} <- fetch_agent(agent_id, tenant.id) do
-      case Registry.stop_agent(tenant.id, agent.id) do
-        :ok -> json(conn, %{status: "stopped"})
-        {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "agent not running"})
-      end
-    end
-  end
-
   def status(conn, %{"agent_id" => agent_id}) do
     tenant = conn.assigns.current_tenant
 
