@@ -122,12 +122,12 @@ defmodule NornsWeb.RunLive do
           </div>
           <%= if detail = event_detail(event) do %>
             <%= if String.length(detail) > 200 do %>
+              <% {header, body} = split_header(detail) %>
               <details class="mt-1 ml-9 group">
                 <summary class="text-xs text-gray-500 dark:text-gray-600 cursor-pointer hover:text-gray-700 dark:hover:text-gray-400">
-                  <span class="group-open:hidden"><%= String.slice(detail, 0, 200) %><span class="text-gray-400 dark:text-gray-700">...</span></span>
-                  <span class="hidden group-open:inline text-gray-400 dark:text-gray-700">collapse</span>
+                  <span class="whitespace-pre-wrap"><%= header %></span><span class="group-open:hidden whitespace-pre-wrap"><%= if header != "", do: "\n" %><%= truncate_preview(body, 200) %><span class="text-gray-400 dark:text-gray-700">...</span></span>
                 </summary>
-                <div class="text-xs text-gray-500 dark:text-gray-600 whitespace-pre-wrap mt-1"><%= detail %></div>
+                <div class="text-xs text-gray-500 dark:text-gray-600 whitespace-pre-wrap mt-1"><%= body %></div>
               </details>
             <% else %>
               <div class="mt-1 ml-9 text-xs text-gray-500 dark:text-gray-600 whitespace-pre-wrap"><%= detail %></div>
@@ -316,6 +316,24 @@ defmodule NornsWeb.RunLive do
   defp event_detail(%{event_type: "waiting_for_user", payload: %{"question" => q}}), do: q
   defp event_detail(%{event_type: "user_response", payload: %{"content" => c}}), do: c
   defp event_detail(_), do: nil
+
+  # Truncate to `limit` chars, then trim back to the last word boundary so
+  # the preview doesn't cut a word in half.
+  defp truncate_preview(text, limit) do
+    text
+    |> String.slice(0, limit)
+    |> String.replace(~r/\s+\S*$/, "")
+  end
+
+  # Splits off the first line (e.g. "N in / M out tokens") so it can stay
+  # pinned next to the disclosure arrow in both collapsed and expanded state,
+  # instead of being swapped out for a "collapse" label on expand.
+  defp split_header(detail) do
+    case String.split(detail, "\n", parts: 2) do
+      [header, body] -> {header, body}
+      [only] -> {"", only}
+    end
+  end
 
   defp format_time(nil), do: ""
   defp format_time(dt), do: Calendar.strftime(dt, "%H:%M:%S.") <> String.slice(to_string(dt.microsecond |> elem(0)), 0, 3)
