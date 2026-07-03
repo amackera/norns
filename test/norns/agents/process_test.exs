@@ -1,7 +1,7 @@
 defmodule Norns.Agents.ProcessTest do
   use Norns.DataCase, async: false
 
-  alias Norns.{Conversations, Runs}
+  alias Norns.{Agents, Conversations, Runs}
   alias Norns.Agents.Process, as: AgentProcess
   alias Norns.LLM.Fake
 
@@ -142,6 +142,46 @@ defmodule Norns.Agents.ProcessTest do
       assert "tool_call" in event_types
       assert "tool_result" in event_types
       assert Enum.count(event_types, &(&1 == "llm_request")) == 2
+    end
+  end
+
+  describe "agent_def refresh" do
+    test "picks up a model change from a REST update mid-run, without a restart", %{
+      tenant: tenant,
+      agent: agent
+    } do
+      Fake.set_responses([
+        %{
+          content: [
+            %{
+              "type" => "tool_use",
+              "id" => "call_1",
+              "name" => "web_search",
+              "input" => %{"query" => "elixir programming"}
+            }
+          ],
+          stop_reason: "tool_use"
+        },
+        %{
+          content: [%{"type" => "text", "text" => "Based on my search, Elixir is great!"}],
+          stop_reason: "end_turn"
+        }
+      ])
+
+      {:ok, pid} =
+        AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id, test_pid: self())
+
+      subscribe_and_send(pid, agent.id, "Tell me about Elixir")
+
+      # Give the update time to land in the DB before the process dispatches
+      # its second (post-tool-call) LLM request.
+      assert_receive {:runtime_hook, :after_tool_call_persisted, _payload}, 1_000
+      {:ok, _agent} = Agents.update_agent(agent, %{model: "claude-updated-model"})
+
+      wait_for(:completed)
+
+      calls = Fake.calls()
+      assert Enum.map(calls, & &1.model) == [agent.model, "claude-updated-model"]
     end
   end
 

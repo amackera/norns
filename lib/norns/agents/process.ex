@@ -48,17 +48,18 @@ defmodule Norns.Agents.Process do
     tenant = Tenants.get_tenant!(tenant_id)
     api_key = tenant.api_keys["anthropic"] || ""
 
+    explicit_tools = Keyword.get(opts, :tools, [])
+    max_steps_override = Keyword.get(opts, :max_steps)
+
     agent_def =
       Keyword.get_lazy(opts, :agent_def, fn ->
-        explicit_tools = Keyword.get(opts, :tools, [])
         worker_tools = WorkerRegistry.available_tools(tenant_id)
         tools = explicit_tools ++ worker_tools
-        max_steps = Keyword.get(opts, :max_steps)
 
         def_opts = [tools: tools]
         base_def = AgentDef.from_agent(agent, def_opts)
 
-        if max_steps, do: %{base_def | max_steps: max_steps}, else: base_def
+        if max_steps_override, do: %{base_def | max_steps: max_steps_override}, else: base_def
       end)
 
     state = %{
@@ -68,6 +69,8 @@ defmodule Norns.Agents.Process do
       agent: agent,
       api_key: api_key,
       agent_def: agent_def,
+      explicit_tools: explicit_tools,
+      max_steps_override: max_steps_override,
       conversation: nil,
       messages: [],
       step: 0,
@@ -142,6 +145,7 @@ defmodule Norns.Agents.Process do
 
   @impl true
   def handle_continue(:llm_loop, state) do
+    state = refresh_agent_def(state)
     max_steps = state.agent_def.max_steps
 
     if state.step >= max_steps do
@@ -213,6 +217,19 @@ defmodule Norns.Agents.Process do
 
   def handle_continue({:resume_tools, tool_use_blocks}, state) do
     dispatch_tool_execution(state, tool_use_blocks, false)
+  end
+
+  # Re-reads the agent record before every LLM dispatch so REST updates to
+  # model/system_prompt/max_steps/etc. take effect on the next step, without
+  # requiring the process to be restarted.
+  defp refresh_agent_def(state) do
+    agent = Agents.get_agent!(state.agent_id)
+    base_def = AgentDef.from_agent(agent, tools: state.explicit_tools)
+
+    agent_def =
+      if state.max_steps_override, do: %{base_def | max_steps: state.max_steps_override}, else: base_def
+
+    %{state | agent: agent, agent_def: agent_def}
   end
 
   defp dispatch_tool_execution(state, tool_use_blocks, log_calls?) do
