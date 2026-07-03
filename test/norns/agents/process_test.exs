@@ -381,5 +381,91 @@ defmodule Norns.Agents.ProcessTest do
       assert Enum.at(second_call.messages, 0)["content"] == "first message"
       assert Enum.at(second_call.messages, 2)["content"] == "second message"
     end
+
+    test "preserves tool_calls/tool_call_id when a later turn reloads from the DB", %{
+      tenant: tenant,
+      agent: agent
+    } do
+      agent =
+        create_agent(tenant, %{
+          model_config: %{"mode" => "conversation", "context_window" => 20},
+          name: agent.name <> "-tools"
+        })
+
+      conversation_key = "slack:C-tools"
+
+      # Turn 1: a tool-using exchange. Messages stay in-memory (atom-keyed)
+      # and are persisted to the conversation on completion.
+      Fake.set_responses([
+        %{
+          content: [
+            %{"type" => "tool_use", "id" => "call_1", "name" => "web_search", "input" => %{"query" => "elixir"}}
+          ],
+          stop_reason: "tool_use"
+        },
+        %{content: [%{"type" => "text", "text" => "Found it."}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid1} =
+        AgentProcess.start_link(
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          conversation_key: conversation_key
+        )
+
+      subscribe_and_send(pid1, agent.id, "search for elixir")
+      wait_for(:completed)
+
+      # Stop the process so turn 2 starts fresh and must reload the
+      # conversation history from Postgres (the path that stripped tool ids).
+      :ok = GenServer.stop(pid1)
+      wait_until_deregistered(tenant.id, agent.id, conversation_key)
+
+      Fake.set_responses([
+        %{content: [%{"type" => "text", "text" => "Second reply"}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid2} =
+        AgentProcess.start_link(
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          conversation_key: conversation_key
+        )
+
+      subscribe_and_send(pid2, agent.id, "and now summarize")
+      wait_for(:completed)
+
+      second_run_id = AgentProcess.get_state(pid2).run_id
+      run = Runs.get_run!(second_run_id)
+
+      # The neutral message history dispatched on turn 2 (reloaded from the DB)
+      # must still pair the assistant tool_use with its tool result.
+      llm_request =
+        run.id
+        |> Runs.list_events()
+        |> Enum.find(&(&1.event_type == "llm_request"))
+
+      messages = llm_request.payload["messages"]
+
+      assistant_with_tools =
+        Enum.find(messages, fn m -> m["role"] == "assistant" and m["tool_calls"] not in [nil, []] end)
+
+      assert assistant_with_tools, "expected reloaded assistant message to retain tool_calls"
+      assert hd(assistant_with_tools["tool_calls"])["id"] == "call_1"
+
+      tool_message = Enum.find(messages, &(&1["role"] == "tool"))
+      assert tool_message, "expected reloaded tool result message to be present"
+      assert tool_message["tool_call_id"] == "call_1"
+    end
+  end
+
+  defp wait_until_deregistered(tenant_id, agent_id, conversation_key, attempts \\ 50) do
+    case Norns.Agents.Registry.lookup(tenant_id, agent_id, conversation_key) do
+      :error -> :ok
+      {:ok, _pid} when attempts > 0 ->
+        Process.sleep(10)
+        wait_until_deregistered(tenant_id, agent_id, conversation_key, attempts - 1)
+      {:ok, _pid} -> flunk("agent process still registered after stop")
+    end
   end
 end

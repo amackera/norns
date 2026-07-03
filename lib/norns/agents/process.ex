@@ -929,13 +929,29 @@ defmodule Norns.Agents.Process do
   defp backtrack_to_pair_boundary(_messages, drop), do: drop
 
   defp normalize_messages(messages) when is_list(messages) do
-    Enum.map(messages, fn
-      %{role: _role, content: _content} = message -> message
-      %{"role" => role, "content" => content} -> %{role: role, content: content}
-    end)
+    Enum.map(messages, &normalize_message/1)
   end
 
   defp normalize_messages(_messages), do: []
+
+  # In-memory messages already carry atom keys and the full neutral shape.
+  defp normalize_message(%{role: _role, content: _content} = message), do: message
+
+  # Messages reloaded from Postgres JSONB come back string-keyed. Rebuild them
+  # with atom keys while preserving the tool-linkage fields (tool_calls on
+  # assistant turns; tool_call_id/name/is_error on tool turns) — without these,
+  # Anthropic rejects the replayed history since tool results can't be paired
+  # back to their tool_use blocks.
+  defp normalize_message(%{"role" => role} = m) do
+    %{role: role, content: m["content"]}
+    |> maybe_put(:tool_calls, m["tool_calls"])
+    |> maybe_put(:tool_call_id, m["tool_call_id"])
+    |> maybe_put(:name, m["name"])
+    |> maybe_put(:is_error, m["is_error"])
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp broadcast(state, event, payload) do
     Phoenix.PubSub.broadcast(
