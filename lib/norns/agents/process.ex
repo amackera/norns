@@ -755,6 +755,7 @@ defmodule Norns.Agents.Process do
 
   defp complete_successfully(state, content) do
     text = if is_binary(content), do: content, else: ""
+    text = if String.trim(text) == "", do: last_non_empty_assistant_content(state.messages) || text, else: text
 
     append(state.run, Events.run_completed(%{"output" => text}))
 
@@ -764,6 +765,21 @@ defmodule Norns.Agents.Process do
 
     broadcast(state, :completed, %{output: text})
     finish_run(state)
+  end
+
+  # A turn can produce substantive content alongside a tool call, then end
+  # with an empty "stop" turn. Fall back to the last non-empty assistant
+  # text rather than losing that content.
+  defp last_non_empty_assistant_content(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{role: "assistant", content: content} when is_binary(content) ->
+        if String.trim(content) == "", do: nil, else: content
+
+      _other ->
+        nil
+    end)
   end
 
   defp complete_with_error(state, reason) when is_binary(reason) do
@@ -892,10 +908,25 @@ defmodule Norns.Agents.Process do
 
   defp apply_context_strategy(%{agent_def: %{context_strategy: :sliding_window}} = state) do
     window = max(state.agent_def.context_window, 1)
-    Enum.take(state.messages, -window)
+    drop = max(length(state.messages) - window, 0)
+    drop = backtrack_to_pair_boundary(state.messages, drop)
+    Enum.drop(state.messages, drop)
   end
 
   defp apply_context_strategy(%{messages: messages}), do: messages
+
+  # A tool_use message is always immediately followed by its tool_result
+  # message(s) (see handle_wait_or_continue/4), so a window boundary that
+  # lands on a "tool" message means the boundary split a pair. Back up
+  # until the boundary lands on the owning assistant message instead.
+  defp backtrack_to_pair_boundary(messages, drop) when drop > 0 do
+    case Enum.at(messages, drop) do
+      %{role: "tool"} -> backtrack_to_pair_boundary(messages, drop - 1)
+      _ -> drop
+    end
+  end
+
+  defp backtrack_to_pair_boundary(_messages, drop), do: drop
 
   defp normalize_messages(messages) when is_list(messages) do
     Enum.map(messages, fn

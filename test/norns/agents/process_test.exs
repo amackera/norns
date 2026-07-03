@@ -185,6 +185,92 @@ defmodule Norns.Agents.ProcessTest do
     end
   end
 
+  describe "sliding window context strategy" do
+    test "keeps tool_use/tool_result pairs atomic when trimming", %{tenant: tenant} do
+      agent = create_agent(tenant, %{model_config: %{"context_window" => 1}})
+
+      Fake.set_responses([
+        %{
+          content: [
+            %{"type" => "tool_use", "id" => "call_1", "name" => "web_search", "input" => %{"query" => "a"}}
+          ],
+          stop_reason: "tool_use"
+        },
+        %{
+          content: [
+            %{"type" => "tool_use", "id" => "call_2", "name" => "web_search", "input" => %{"query" => "b"}}
+          ],
+          stop_reason: "tool_use"
+        },
+        %{
+          content: [%{"type" => "text", "text" => "Done."}],
+          stop_reason: "end_turn"
+        }
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Search twice")
+      wait_for(:completed)
+
+      state = AgentProcess.get_state(pid)
+      run = Runs.get_run!(state.run_id)
+      events = Runs.list_events(run.id)
+
+      llm_requests =
+        events
+        |> Enum.filter(&(&1.event_type == "llm_request"))
+        |> Enum.sort_by(& &1.payload["step"])
+
+      # Step 3's request is built from a 5-message history (user, assistant+tool_use,
+      # tool_result, assistant+tool_use, tool_result) with context_window=1 — a naive
+      # tail-slice would start on the second tool_result and orphan it.
+      third_request = Enum.at(llm_requests, 2)
+      messages = third_request.payload["messages"]
+
+      refute hd(messages)["role"] == "tool"
+
+      tool_use_ids =
+        messages
+        |> Enum.flat_map(&(&1["tool_calls"] || []))
+        |> Enum.map(& &1["id"])
+
+      tool_result_ids =
+        messages
+        |> Enum.filter(&(&1["role"] == "tool"))
+        |> Enum.map(& &1["tool_call_id"])
+
+      assert Enum.all?(tool_result_ids, &(&1 in tool_use_ids))
+    end
+  end
+
+  describe "empty final output fallback" do
+    test "falls back to the last non-empty assistant content", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([
+        %{
+          content: [
+            %{"type" => "text", "text" => "Here's what I found: Elixir is great."},
+            %{"type" => "tool_use", "id" => "call_1", "name" => "web_search", "input" => %{"query" => "elixir"}}
+          ],
+          stop_reason: "tool_use"
+        },
+        %{
+          content: [%{"type" => "text", "text" => ""}],
+          stop_reason: "end_turn"
+        }
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Tell me about Elixir")
+      wait_for(:completed)
+
+      state = AgentProcess.get_state(pid)
+      run = Runs.get_run!(state.run_id)
+
+      assert run.status == "completed"
+      assert run.output == "Here's what I found: Elixir is great."
+    end
+  end
+
   describe "max steps" do
     test "stops when max_steps exceeded", %{tenant: tenant, agent: agent} do
       responses =
