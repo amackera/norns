@@ -11,13 +11,10 @@ config :norns, Oban,
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
   ],
-  queues: [default: 10, agents: 5]
+  queues: [default: 10]
 
 config :norns,
   generators: [timestamp_type: :utc_datetime_usec]
-
-
-config :norns, Norns.LLM, module: Norns.LLM.Anthropic
 
 config :norns, NornsWeb.Endpoint,
   url: [host: "localhost"],

@@ -1,9 +1,12 @@
 defmodule Norns.LLM do
   @moduledoc """
-  LLM dispatcher. Delegates to the configured backend module.
+  LLM dispatcher, used as a test seam for simulating a worker's provider call
+  (see `Norns.TestWorker`). The real runtime never calls a provider from the
+  orchestrator — connected workers translate the neutral format and call their
+  own provider. There is intentionally no built-in provider adapter here.
 
-  Configure via:
-    config :norns, Norns.LLM, module: Norns.LLM.Anthropic
+  Configure a backend module (e.g. `Norns.LLM.Fake` in tests) via:
+    config :norns, Norns.LLM, module: Norns.LLM.Fake
   """
 
   @doc "Multi-turn chat with optional tool definitions."
@@ -32,7 +35,14 @@ defmodule Norns.LLM do
   end
 
   defp impl do
-    Application.get_env(:norns, __MODULE__, [])
-    |> Keyword.get(:module, Norns.LLM.Anthropic)
+    case Application.get_env(:norns, __MODULE__, [])[:module] do
+      nil ->
+        raise "Norns.LLM has no backend configured. This dispatcher is a test " <>
+                "seam; the real runtime dispatches to connected workers, which " <>
+                "translate and call their own provider."
+
+      module ->
+        module
+    end
   end
 end
