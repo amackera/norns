@@ -118,4 +118,59 @@ defmodule Norns.Workers.WorkerRegistryTest do
       WorkerRegistry.unregister_worker(2, "tenant-b")
     end
   end
+
+  describe "worker crash recovery" do
+    test "reclaims in-flight tasks when a worker reconnects under the same id" do
+      tools = [%{"name" => "reconnect_tool", "description" => "R", "input_schema" => %{}}]
+      :ok = WorkerRegistry.register_worker(1, "recon", self(), tools)
+
+      {:ok, task_id} = WorkerRegistry.dispatch_task(1, "reconnect_tool", %{}, from_pid: self())
+      assert_receive {:push_tool_task, %{task_id: ^task_id}}, 1_000
+
+      # The worker crashes and its container reconnects: a fresh registration
+      # arrives under the same {tenant, worker_id} key. The task that was in
+      # flight to the dead incarnation is lost and must be reclaimed at once,
+      # rather than stranding the run until the 5-minute task timeout.
+      :ok = WorkerRegistry.register_worker(1, "recon", self(), tools)
+
+      assert_receive {:task_result, ^task_id, {:error, "worker disconnected"}}, 1_000
+
+      WorkerRegistry.unregister_worker(1, "recon")
+    end
+
+    test "reclaim is scoped to the disconnected worker, not the whole tenant" do
+      pid_a = spawn(fn -> Process.sleep(:infinity) end)
+      pid_b = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = WorkerRegistry.register_worker(1, "wa", pid_a, [%{"name" => "tool_a", "description" => "A", "input_schema" => %{}}])
+      :ok = WorkerRegistry.register_worker(1, "wb", pid_b, [%{"name" => "tool_b", "description" => "B", "input_schema" => %{}}])
+
+      {:ok, task_id} = WorkerRegistry.dispatch_task(1, "tool_a", %{}, from_pid: self())
+
+      # Disconnecting a different worker on the same tenant must not fail this task.
+      WorkerRegistry.unregister_worker(1, "wb")
+      refute_receive {:task_result, ^task_id, _}, 300
+
+      # Disconnecting the owning worker reclaims it.
+      WorkerRegistry.unregister_worker(1, "wa")
+      assert_receive {:task_result, ^task_id, {:error, "worker disconnected"}}, 1_000
+    end
+
+    test "a late terminate from a replaced connection does not evict the new worker" do
+      old_pid = spawn(fn -> Process.sleep(:infinity) end)
+      tools = [%{"name" => "guard_tool", "description" => "G", "input_schema" => %{}}]
+
+      :ok = WorkerRegistry.register_worker(1, "guarded", old_pid, tools)
+      # Reconnect: same worker_id, new channel pid.
+      :ok = WorkerRegistry.register_worker(1, "guarded", self(), tools)
+
+      # The old connection's terminate arrives late, carrying the old pid.
+      WorkerRegistry.unregister_worker(1, "guarded", old_pid)
+      Process.sleep(50)
+
+      # The reconnected worker is still registered.
+      assert [%{name: "guard_tool"}] = WorkerRegistry.available_tools(1)
+
+      WorkerRegistry.unregister_worker(1, "guarded", self())
+    end
+  end
 end

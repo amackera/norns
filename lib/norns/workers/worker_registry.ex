@@ -23,9 +23,13 @@ defmodule Norns.Workers.WorkerRegistry do
     GenServer.call(__MODULE__, {:register, tenant_id, worker_id, channel_pid, tools, capabilities})
   end
 
-  @doc "Remove a worker."
-  def unregister_worker(tenant_id, worker_id) do
-    GenServer.cast(__MODULE__, {:unregister, tenant_id, worker_id})
+  @doc """
+  Remove a worker. Pass the terminating `channel_pid` so a late `terminate`
+  from a connection that has already been replaced by a reconnect is ignored
+  instead of evicting the healthy new worker.
+  """
+  def unregister_worker(tenant_id, worker_id, channel_pid \\ nil) do
+    GenServer.cast(__MODULE__, {:unregister, tenant_id, worker_id, channel_pid})
   end
 
   @doc "Get all tools from connected workers for a tenant, as %Tool{} structs."
@@ -79,8 +83,16 @@ defmodule Norns.Workers.WorkerRegistry do
 
   @impl true
   def handle_call({:register, tenant_id, worker_id, channel_pid, tools, capabilities}, _from, state) do
-    ref = Process.monitor(channel_pid)
     key = {tenant_id, worker_id}
+
+    # A registration under a key that already holds a worker means a reconnect
+    # (the worker crashed and came back). Stop monitoring the dead incarnation
+    # and reclaim any tasks that were in flight to it — the fresh connection has
+    # no memory of them, so they must fail and let the agent retry/redispatch.
+    state = demonitor_existing(state, key)
+    state = reclaim_worker_tasks(state, key)
+
+    ref = Process.monitor(channel_pid)
 
     worker = %{
       channel_pid: channel_pid,
@@ -100,7 +112,7 @@ defmodule Norns.Workers.WorkerRegistry do
         |> TaskQueue.flush(name)
         |> Enum.reduce(acc, fn task, pending_state ->
           push_to_worker(channel_pid, {:push_tool_task, task_payload(task)})
-          put_in(pending_state.pending[task.task_id], %{from_pid: task.from_pid, tenant_id: tenant_id, type: :tool})
+          put_in(pending_state.pending[task.task_id], %{from_pid: task.from_pid, tenant_id: tenant_id, type: :tool, worker_key: key})
         end)
       end)
 
@@ -110,7 +122,7 @@ defmodule Norns.Workers.WorkerRegistry do
         |> TaskQueue.flush("__llm__")
         |> Enum.reduce(state, fn task, pending_state ->
           push_to_worker(channel_pid, {:llm_task, llm_task_payload(task)})
-          put_in(pending_state.pending[task.task_id], %{from_pid: task.from_pid, tenant_id: tenant_id, type: :llm})
+          put_in(pending_state.pending[task.task_id], %{from_pid: task.from_pid, tenant_id: tenant_id, type: :llm, worker_key: key})
         end)
       else
         state
@@ -153,13 +165,13 @@ defmodule Norns.Workers.WorkerRegistry do
     worker = find_worker(state, tenant_id, fn w -> :llm in w.capabilities and Process.alive?(w.channel_pid) end)
 
     case worker do
-      {_key, w} ->
+      {key, w} ->
         task_id = generate_task_id()
         full_task = Map.put(task, :task_id, task_id)
 
         push_to_worker(w.channel_pid, {:llm_task, full_task})
 
-        pending = %{from_pid: from_pid, tenant_id: tenant_id, type: :llm}
+        pending = %{from_pid: from_pid, tenant_id: tenant_id, type: :llm, worker_key: key}
         state = put_in(state.pending[task_id], pending)
 
         {:reply, {:ok, task_id}, state}
@@ -187,7 +199,7 @@ defmodule Norns.Workers.WorkerRegistry do
     worker = find_worker(state, tenant_id, fn w -> Process.alive?(w.channel_pid) and Enum.any?(w.tools, &(tool_name(&1) == tool_name)) end)
 
     case worker do
-      {_key, w} ->
+      {key, w} ->
         task_id = generate_task_id()
 
         push_to_worker(w.channel_pid, {:push_tool_task, %{
@@ -198,7 +210,7 @@ defmodule Norns.Workers.WorkerRegistry do
           run_id: run_id
         }})
 
-        pending = %{from_pid: from_pid, tenant_id: tenant_id, type: :tool}
+        pending = %{from_pid: from_pid, tenant_id: tenant_id, type: :tool, worker_key: key}
         state = put_in(state.pending[task_id], pending)
 
         {:reply, {:ok, task_id}, state}
@@ -219,27 +231,24 @@ defmodule Norns.Workers.WorkerRegistry do
   end
 
   @impl true
-  def handle_cast({:unregister, tenant_id, worker_id}, state) do
+  def handle_cast({:unregister, tenant_id, worker_id, channel_pid}, state) do
     key = {tenant_id, worker_id}
 
-    case Map.pop(state.workers, key) do
-      {%{monitor_ref: ref}, workers} ->
+    case state.workers[key] do
+      %{channel_pid: stored_pid, monitor_ref: ref}
+      when is_nil(channel_pid) or stored_pid == channel_pid ->
         Process.demonitor(ref, [:flush])
         Logger.info("Worker #{worker_id} unregistered from tenant #{tenant_id}")
 
-        # Fail pending tasks so agents can retry instead of waiting for timeout
-        {failed, remaining} =
-          Map.split_with(state.pending, fn {_task_id, info} ->
-            info.tenant_id == tenant_id
-          end)
+        state = %{state | workers: Map.delete(state.workers, key)}
+        # Fail this worker's in-flight tasks so agents retry instead of hanging
+        # until the task timeout. Precise per-worker reclaim leaves any other
+        # worker on the same tenant untouched.
+        {:noreply, reclaim_worker_tasks(state, key)}
 
-        Enum.each(failed, fn {task_id, %{from_pid: pid}} ->
-          send(pid, {:task_result, task_id, {:error, "worker disconnected"}})
-        end)
-
-        {:noreply, %{state | workers: workers, pending: remaining}}
-
-      {nil, _} ->
+      _stale_or_missing ->
+        # No worker under this key, or a late terminate from a connection that
+        # has already been replaced by a reconnect — don't evict the new worker.
         {:noreply, state}
     end
   end
@@ -272,19 +281,10 @@ defmodule Norns.Workers.WorkerRegistry do
     case Enum.find(state.workers, fn {_, w} -> w.monitor_ref == ref end) do
       {{tenant_id, worker_id} = key, _worker} ->
         Logger.info("Worker #{worker_id} disconnected from tenant #{tenant_id}")
-        workers = Map.delete(state.workers, key)
+        state = %{state | workers: Map.delete(state.workers, key)}
 
-        # Fail all pending tasks — agent retry policy will re-dispatch
-        {failed, remaining} =
-          Map.split_with(state.pending, fn {_task_id, info} ->
-            info.tenant_id == tenant_id
-          end)
-
-        Enum.each(failed, fn {task_id, %{from_pid: pid}} ->
-          send(pid, {:task_result, task_id, {:error, "worker disconnected"}})
-        end)
-
-        {:noreply, %{state | workers: workers, pending: remaining}}
+        # Fail this worker's in-flight tasks — the agent retry policy re-dispatches
+        {:noreply, reclaim_worker_tasks(state, key)}
 
       nil ->
         {:noreply, state}
@@ -292,6 +292,33 @@ defmodule Norns.Workers.WorkerRegistry do
   end
 
   # -- Helpers --
+
+  # Stop monitoring the previous incarnation registered under `key`, if any.
+  # `:flush` drops a possibly-already-queued :DOWN for it so a later handler
+  # can't act on a stale ref that no longer identifies the current worker.
+  defp demonitor_existing(state, key) do
+    case state.workers[key] do
+      %{monitor_ref: ref} -> Process.demonitor(ref, [:flush])
+      _ -> :ok
+    end
+
+    state
+  end
+
+  # Fail every pending task owned by `worker_key`, notifying the waiting agent
+  # process so its retry policy re-dispatches to a healthy worker (or queues).
+  defp reclaim_worker_tasks(state, worker_key) do
+    {failed, remaining} =
+      Map.split_with(state.pending, fn {_task_id, info} ->
+        Map.get(info, :worker_key) == worker_key
+      end)
+
+    Enum.each(failed, fn {task_id, %{from_pid: pid}} ->
+      send(pid, {:task_result, task_id, {:error, "worker disconnected"}})
+    end)
+
+    %{state | pending: remaining}
+  end
 
   defp tool_name(%{"name" => name}), do: name
   defp tool_name(name) when is_binary(name), do: name

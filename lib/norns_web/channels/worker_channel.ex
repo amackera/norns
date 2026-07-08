@@ -40,7 +40,7 @@ defmodule NornsWeb.WorkerChannel do
   @impl true
   def terminate(_reason, socket) do
     if worker_id = socket.assigns[:worker_id] do
-      WorkerRegistry.unregister_worker(socket.assigns.tenant_id, worker_id)
+      WorkerRegistry.unregister_worker(socket.assigns.tenant_id, worker_id, self())
     end
 
     :ok
