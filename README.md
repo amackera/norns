@@ -33,7 +33,7 @@ That's it. You have a running Norns server and a connected agent worker. See the
 
 ## The problem
 
-If you run agents locally, durability doesn't feel like a problem. Your machine stays on, the process stays alive, and the conversation transcript is right there. Cloud infrastructure is different. Containers get evicted. VMs get preempted. Deploys ship new code and kill in-flight processes. The environment your agent is running in can disappear at any moment, and there's no filesystem or long-lived process to fall back on.
+If you run agents locally, durability is a solved problem. Modern operating and file systems and solid state drives are very reliable. Your machine stays on, the process stays alive, and the conversation transcript is right there. Cloud infrastructure is a little different. It's ephemeral, temporary. Containers get evicted. VMs get preempted. Deploys ship new code and kill in-flight processes. An agent's environment can disappear at any moment, and there's no durable file system or long-lived process to fall back on.
 
 Your agent is 8 tool calls deep when the container gets evicted. Without something like Norns, you start over from the beginning. With Norns, the next worker picks up at call 9.
 
@@ -45,16 +45,17 @@ Your agent is halfway through a 20-step research task when a deploy ships. Witho
 
 The Norns orchestrator is a state machine. It doesn't call LLMs or execute tools. It manages state transitions and persists events. Workers do the actual work.
 
-```text
-Orchestrator                         Worker (your code)
-  │                                      │
-  │  llm_task ─────────────────────────► │  calls Claude/GPT/etc
-  │  ◄── response ─────────────────────  │
-  │                                      │
-  │  tool_task ────────────────────────► │  runs your function
-  │  ◄── result ───────────────────────  │
-  │                                      │
-  │  (checkpoint, repeat)                │
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant W as Worker (your code)
+    O->>W: llm_task
+    Note right of W: calls Claude/GPT/etc
+    W-->>O: response
+    O->>W: tool_task
+    Note right of W: runs your function
+    W-->>O: result
+    Note over O,W: checkpoint, repeat
 ```
 
 Workers connect via WebSocket, register their tools and capabilities, and hold all the API keys. If no worker is connected, tasks queue and resume when one reconnects. If a worker dies mid-task, the orchestrator notices and puts the task back in the queue.
