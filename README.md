@@ -66,8 +66,8 @@ Side-effecting tools get deterministic idempotency keys derived from the run ID,
 
 ## SDKs and examples
 
-- [Python SDK](https://github.com/nornscode/norns-sdk-python)
-- [Elixir SDK](https://github.com/nornscode/norns-sdk-elixir)
+- [Python SDK](https://github.com/nornscode/norns-sdk-python) — `pip install norns-sdk` ([PyPI](https://pypi.org/project/norns-sdk/))
+- [Elixir SDK](https://github.com/nornscode/norns-sdk-elixir) — `{:norns_sdk, "~> 0.1"}` ([Hex](https://hex.pm/packages/norns_sdk))
 - [CLI (`nornsctl`)](https://github.com/nornscode/nornsctl)
 - [Hello example](https://github.com/nornscode/norns-hello-agent)
 - [Mimir (full example app)](https://github.com/nornscode/norns-mimir-agent)
