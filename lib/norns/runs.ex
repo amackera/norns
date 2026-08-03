@@ -109,6 +109,34 @@ defmodule Norns.Runs do
     }
   end
 
+  @doc """
+  The question a run is currently parked on, or `nil` if it isn't waiting.
+
+  Derived from the last `waiting_for_user` event rather than stored on the run,
+  so it stays correct across replays.
+  """
+  def pending_question(%Run{status: "waiting"} = run) do
+    RunEvent
+    |> where([e], e.run_id == ^run.id)
+    |> where([e], e.event_type == "waiting_for_user")
+    |> order_by([e], desc: e.sequence)
+    |> limit(1)
+    |> Repo.one()
+    |> case do
+      nil ->
+        nil
+
+      event ->
+        %{
+          "question" => event.payload["question"],
+          "tool_call_id" => event.payload["tool_call_id"],
+          "asked_at" => event.inserted_at
+        }
+    end
+  end
+
+  def pending_question(%Run{}), do: nil
+
   defp next_sequence(run_id) do
     RunEvent
     |> where([e], e.run_id == ^run_id)

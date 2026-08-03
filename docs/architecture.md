@@ -33,11 +33,25 @@ Each agent is a GenServer managed by a DynamicSupervisor:
 - `:waiting_timer` — paused on the `wait` builtin until a timer fires
 - `:waiting` — paused on the `ask_human` builtin until a human answers
 
-A run parked in `:waiting` stays parked indefinitely. Answer it with
-`POST /api/v1/runs/:id/reply` (`{"answer": "..."}`). Because the pause is
-re-derived from the still-pending `ask_human` tool call, a parked run that
-crashes re-parks on resume and re-broadcasts its question rather than
-resuming the LLM loop.
+A run parked in `:waiting` stays parked indefinitely. There are two ways to
+answer it:
+
+- **Just send a message.** `POST /api/v1/agents/:id/messages` to a parked
+  agent is treated as the answer. Conversational clients (a Slack bot, a chat
+  UI) don't have to track agent state or switch endpoints mid-conversation.
+  This is the primary path.
+- **Answer a specific run.** `POST /api/v1/runs/:id/reply` (`{"answer": "..."}`)
+  targets one run explicitly — useful for programmatic clients and for agents
+  with several conversations parked at once.
+
+The run's own `status` becomes `"waiting"` while parked, and the run JSON
+carries a `waiting_for` object (`question`, `tool_call_id`, `asked_at`), so
+polling clients can tell "working" from "waiting on you" without scraping the
+event log.
+
+Because the pause is re-derived from the still-pending `ask_human` tool call, a
+parked run that crashes re-parks on resume and re-broadcasts its question
+rather than resuming the LLM loop.
 
 The agent is never blocked — it always responds to status queries. Agent processes start automatically when a message is sent and stop when idle.
 

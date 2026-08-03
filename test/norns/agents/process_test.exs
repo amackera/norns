@@ -171,6 +171,11 @@ defmodule Norns.Agents.ProcessTest do
       run = Runs.get_run!(state.run_id)
       event_types = Enum.map(Runs.list_events(run.id), & &1.event_type)
       assert "waiting_for_user" in event_types
+
+      # Polling clients can tell "working" from "waiting on you".
+      assert run.status == "waiting"
+      assert %{"question" => "Book the 7pm show?", "tool_call_id" => "call_ask"} =
+               Runs.pending_question(run)
     end
 
     test "a reply resumes the run and feeds the answer back to the LLM", %{tenant: tenant, agent: agent} do
@@ -191,6 +196,7 @@ defmodule Norns.Agents.ProcessTest do
 
       run = Runs.get_run!(state.run_id)
       assert run.status == "completed"
+      assert Runs.pending_question(run) == nil
 
       events = Runs.list_events(run.id)
 
@@ -204,6 +210,31 @@ defmodule Norns.Agents.ProcessTest do
 
       # The LLM ran again after the answer arrived.
       assert Enum.count(events, &(&1.event_type == "llm_request")) == 2
+    end
+
+    test "a normal message to a parked agent is treated as the answer", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([
+        ask_human_response("Book the 7pm show?"),
+        %{content: [%{"type" => "text", "text" => "Booked."}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Buy me tickets")
+      wait_for(:waiting_for_user)
+
+      # A conversational client just replies — no separate endpoint, no :busy.
+      assert {:ok, _run_id} = AgentProcess.send_message(pid, "yes, the 7pm one")
+      wait_for(:completed)
+
+      state = AgentProcess.get_state(pid)
+      run = Runs.get_run!(state.run_id)
+      assert run.status == "completed"
+
+      answer =
+        Runs.list_events(run.id)
+        |> Enum.find(&(&1.event_type == "tool_result" and &1.payload["name"] == "ask_human"))
+
+      assert answer.payload["content"] == "yes, the 7pm one"
     end
 
     test "replying to an agent that is not waiting is rejected", %{tenant: tenant, agent: agent} do

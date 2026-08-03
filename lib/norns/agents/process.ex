@@ -129,6 +129,14 @@ defmodule Norns.Agents.Process do
     {:reply, {:ok, run.id}, state, {:continue, :llm_loop}}
   end
 
+  # A message arriving while parked on ask_human is the answer. Conversational
+  # clients (a Slack bot, a chat UI) shouldn't have to track agent state and
+  # switch endpoints mid-conversation — the human just replies.
+  def handle_call({:send_message, content, _context}, _from, %{status: :waiting, pending_human: pending} = state)
+      when not is_nil(pending) do
+    deliver_human_answer(state, content, {:ok, state.run.id})
+  end
+
   def handle_call({:send_message, _content, _context}, _from, state) do
     Logger.warning("Agent #{state.agent_id} received message while #{state.status}, ignoring")
     {:reply, {:error, :busy}, state}
@@ -136,6 +144,32 @@ defmodule Norns.Agents.Process do
 
   def handle_call({:reply_to_human, answer}, _from, %{status: :waiting, pending_human: pending} = state)
       when not is_nil(pending) do
+    deliver_human_answer(state, answer, :ok)
+  end
+
+  def handle_call({:reply_to_human, _answer}, _from, state) do
+    {:reply, {:error, :not_waiting}, state}
+  end
+
+  @impl true
+  def handle_call(:get_state, _from, state) do
+    reply = %{
+      agent_id: state.agent_id,
+      conversation_id: state.conversation && state.conversation.id,
+      conversation_key: state.conversation_key,
+      run_id: state.run && state.run.id,
+      status: state.status,
+      step: state.step,
+      message_count: length(state.messages),
+    }
+
+    {:reply, reply, state}
+  end
+
+  # Resolve the parked ask_human call with the human's answer and resume.
+  # Shared by the dedicated reply call and by a plain message arriving while
+  # the agent is parked.
+  defp deliver_human_answer(%{pending_human: pending} = state, answer, reply_value) do
     append(state.run, Events.tool_result(%{
       "tool_call_id" => pending.tool_call_id,
       "name" => "ask_human",
@@ -158,31 +192,13 @@ defmodule Norns.Agents.Process do
     }
 
     all_results = pending.pending_results ++ [answer_result]
-    state = %{state | pending_human: nil}
+    {:ok, run} = Runs.update_run(state.run, %{status: "running"})
+    state = %{state | run: run, pending_human: nil}
 
     case handle_pause_or_continue(state, pending.wait_blocks, [], all_results, pending.log_calls?) do
-      {:noreply, new_state} -> {:reply, :ok, new_state}
-      {:noreply, new_state, continue} -> {:reply, :ok, new_state, continue}
+      {:noreply, new_state} -> {:reply, reply_value, new_state}
+      {:noreply, new_state, continue} -> {:reply, reply_value, new_state, continue}
     end
-  end
-
-  def handle_call({:reply_to_human, _answer}, _from, state) do
-    {:reply, {:error, :not_waiting}, state}
-  end
-
-  @impl true
-  def handle_call(:get_state, _from, state) do
-    reply = %{
-      agent_id: state.agent_id,
-      conversation_id: state.conversation && state.conversation.id,
-      conversation_key: state.conversation_key,
-      run_id: state.run && state.run.id,
-      status: state.status,
-      step: state.step,
-      message_count: length(state.messages),
-    }
-
-    {:reply, reply, state}
   end
 
   @impl true
@@ -509,9 +525,14 @@ defmodule Norns.Agents.Process do
 
         broadcast(state, :waiting_for_user, %{tool_call_id: ask_block["id"], question: question})
 
+        # Surface the pause on the run itself so polling clients can tell
+        # "working" from "waiting on you" without scraping the event log.
+        {:ok, run} = Runs.update_run(state.run, %{status: "waiting"})
+
         {:noreply,
          %{state
-           | status: :waiting,
+           | run: run,
+             status: :waiting,
              pending_human: %{
                tool_call_id: ask_block["id"],
                question: question,
