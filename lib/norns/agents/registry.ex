@@ -46,6 +46,32 @@ defmodule Norns.Agents.Registry do
     end
   end
 
+  @doc """
+  Deliver a human's answer to the agent parked on a run's `ask_human` call.
+
+  The run's conversation persists the key the process registered under, so the
+  exact parked process is recoverable even for runs started without an explicit
+  conversation key.
+  """
+  def reply_to_human(tenant_id, run, answer) do
+    with {:ok, key} <- conversation_key_for(run),
+         {:ok, pid} <- lookup(tenant_id, run.agent_id, key) do
+      AgentProcess.reply_to_human(pid, answer)
+    else
+      :error -> {:error, :not_running}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp conversation_key_for(%{conversation_id: nil}), do: {:ok, "default"}
+
+  defp conversation_key_for(%{conversation_id: id}) do
+    case Norns.Conversations.get_conversation(id) do
+      nil -> {:error, :not_found}
+      conversation -> {:ok, conversation.key}
+    end
+  end
+
   @doc "Stop a running agent process gracefully."
   def stop_agent(tenant_id, agent_id, conversation_key \\ "default") do
     case lookup(tenant_id, agent_id, conversation_key) do

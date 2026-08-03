@@ -145,6 +145,112 @@ defmodule Norns.Agents.ProcessTest do
     end
   end
 
+  describe "ask_human / human-in-the-loop" do
+    defp ask_human_response(question, id \\ "call_ask") do
+      %{
+        content: [
+          %{"type" => "tool_use", "id" => id, "name" => "ask_human", "input" => %{"question" => question}}
+        ],
+        stop_reason: "tool_use"
+      }
+    end
+
+    test "parks in :waiting and broadcasts the question", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([ask_human_response("Book the 7pm show?")])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Buy me tickets")
+
+      payload = wait_for(:waiting_for_user)
+      assert payload.question == "Book the 7pm show?"
+      assert payload.tool_call_id == "call_ask"
+
+      state = AgentProcess.get_state(pid)
+      assert state.status == :waiting
+
+      run = Runs.get_run!(state.run_id)
+      event_types = Enum.map(Runs.list_events(run.id), & &1.event_type)
+      assert "waiting_for_user" in event_types
+    end
+
+    test "a reply resumes the run and feeds the answer back to the LLM", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([
+        ask_human_response("Book the 7pm show?"),
+        %{content: [%{"type" => "text", "text" => "Booked."}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Buy me tickets")
+      wait_for(:waiting_for_user)
+
+      assert :ok = AgentProcess.reply_to_human(pid, "yes, go ahead")
+      wait_for(:completed)
+
+      state = AgentProcess.get_state(pid)
+      assert state.status == :idle
+
+      run = Runs.get_run!(state.run_id)
+      assert run.status == "completed"
+
+      events = Runs.list_events(run.id)
+
+      answer =
+        Enum.find(events, fn e ->
+          e.event_type == "tool_result" and e.payload["name"] == "ask_human"
+        end)
+
+      assert answer.payload["content"] == "yes, go ahead"
+      assert answer.payload["tool_call_id"] == "call_ask"
+
+      # The LLM ran again after the answer arrived.
+      assert Enum.count(events, &(&1.event_type == "llm_request")) == 2
+    end
+
+    test "replying to an agent that is not waiting is rejected", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([
+        %{content: [%{"type" => "text", "text" => "Done."}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Hello")
+      wait_for(:completed)
+
+      assert {:error, :not_waiting} = AgentProcess.reply_to_human(pid, "unsolicited")
+    end
+
+    test "other tool results are held and delivered alongside the answer", %{tenant: tenant, agent: agent} do
+      Fake.set_responses([
+        %{
+          content: [
+            %{"type" => "tool_use", "id" => "call_search", "name" => "web_search", "input" => %{"query" => "shows"}},
+            %{"type" => "tool_use", "id" => "call_ask", "name" => "ask_human", "input" => %{"question" => "Which one?"}}
+          ],
+          stop_reason: "tool_use"
+        },
+        %{content: [%{"type" => "text", "text" => "Booked."}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Find and book a show")
+
+      wait_for(:waiting_for_user)
+      assert :ok = AgentProcess.reply_to_human(pid, "the 7pm one")
+      wait_for(:completed)
+
+      state = AgentProcess.get_state(pid)
+      run = Runs.get_run!(state.run_id)
+      events = Runs.list_events(run.id)
+
+      result_ids =
+        events
+        |> Enum.filter(&(&1.event_type == "tool_result"))
+        |> Enum.map(& &1.payload["tool_call_id"])
+
+      assert "call_search" in result_ids
+      assert "call_ask" in result_ids
+    end
+  end
+
   describe "agent_def refresh" do
     test "picks up a model change from a REST update mid-run, without a restart", %{
       tenant: tenant,

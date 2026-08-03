@@ -4,7 +4,7 @@ defmodule Norns.Tools.Builtins do
   alias Norns.Tools.Tool
 
   def all do
-    [wait(), launch_agent(), list_agents()]
+    [wait(), ask_human(), launch_agent(), list_agents()]
   end
 
   defp wait do
@@ -18,6 +18,22 @@ defmodule Norns.Tools.Builtins do
           "reason" => %{"type" => "string", "description" => "Why the agent is waiting"}
         },
         "required" => ["seconds"]
+      },
+      handler: :builtin,
+      source: :builtin
+    }
+  end
+
+  defp ask_human do
+    %Tool{
+      name: "ask_human",
+      description: "Ask the human a question and pause until they answer. Use this to confirm before taking an action with real side effects, or when a detail is ambiguous and guessing would be wrong. The run parks indefinitely until a reply arrives.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "question" => %{"type" => "string", "description" => "The question to ask the human"}
+        },
+        "required" => ["question"]
       },
       handler: :builtin,
       source: :builtin

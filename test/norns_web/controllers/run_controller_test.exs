@@ -174,6 +174,72 @@ defmodule NornsWeb.RunControllerTest do
     end
   end
 
+  describe "POST /api/v1/runs/:id/reply" do
+    test "delivers an answer to a parked run", %{conn: conn, tenant: tenant, agent: agent} do
+      Norns.LLM.Fake.set_responses([
+        %{
+          content: [
+            %{
+              "type" => "tool_use",
+              "id" => "call_ask",
+              "name" => "ask_human",
+              "input" => %{"question" => "Proceed?"}
+            }
+          ],
+          stop_reason: "tool_use"
+        },
+        %{content: [%{"type" => "text", "text" => "Done."}], stop_reason: "end_turn"}
+      ])
+
+      Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent.id}")
+
+      {:ok, run_id} =
+        Norns.Agents.Registry.send_message(tenant.id, agent.id, "do the thing",
+          conversation_key: "hitl-test"
+        )
+
+      assert_receive {:waiting_for_user, %{question: "Proceed?"}}, 5000
+
+      conn = post(conn, "/api/v1/runs/#{run_id}/reply", %{"answer" => "yes"})
+      assert %{"status" => "accepted"} = json_response(conn, 202)
+
+      assert_receive {:completed, _}, 5000
+    end
+
+    test "rejects a reply when the run is not waiting", %{conn: conn, tenant: tenant, agent: agent} do
+      {:ok, run} = Norns.Runs.create_run(%{
+        agent_id: agent.id, tenant_id: tenant.id, trigger_type: "message",
+        input: %{"user_message" => "hello"}, status: "completed"
+      })
+
+      conn = post(conn, "/api/v1/runs/#{run.id}/reply", %{"answer" => "yes"})
+      assert json_response(conn, 409)
+    end
+
+    test "requires an answer", %{conn: conn, tenant: tenant, agent: agent} do
+      {:ok, run} = Norns.Runs.create_run(%{
+        agent_id: agent.id, tenant_id: tenant.id, trigger_type: "message",
+        input: %{"user_message" => "hello"}, status: "running"
+      })
+
+      conn = post(conn, "/api/v1/runs/#{run.id}/reply", %{})
+      assert json_response(conn, 422)
+    end
+
+    test "returns 404 for another tenant's run", %{conn: conn} do
+      other_tenant = create_tenant()
+      other_agent = create_agent(other_tenant)
+
+      {:ok, run} = Norns.Runs.create_run(%{
+        agent_id: other_agent.id, tenant_id: other_tenant.id, trigger_type: "message",
+        input: %{"user_message" => "hello"}, status: "running"
+      })
+
+      conn = post(conn, "/api/v1/runs/#{run.id}/reply", %{"answer" => "yes"})
+      assert json_response(conn, 404)
+    end
+  end
+
   describe "GET /api/v1/runs/:id/events" do
     test "returns event log", %{conn: conn, tenant: tenant, agent: agent} do
       {:ok, run} =

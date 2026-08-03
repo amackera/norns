@@ -35,6 +35,11 @@ defmodule Norns.Agents.Process do
     GenServer.call(pid, :get_state)
   end
 
+  @doc "Deliver a human's answer to an agent parked in `:waiting` on `ask_human`."
+  def reply_to_human(pid, answer) when is_binary(answer) do
+    GenServer.call(pid, {:reply_to_human, answer}, 10_000)
+  end
+
   # -- Callbacks --
 
   @impl true
@@ -81,6 +86,7 @@ defmodule Norns.Agents.Process do
       pending_tool_tasks: nil,
       task_timer: nil,
       pending_subagents: %{},
+      pending_human: nil,
       resume_action: nil,
       test_pid: Keyword.get(opts, :test_pid),
       input_tokens: 0,
@@ -126,6 +132,42 @@ defmodule Norns.Agents.Process do
   def handle_call({:send_message, _content, _context}, _from, state) do
     Logger.warning("Agent #{state.agent_id} received message while #{state.status}, ignoring")
     {:reply, {:error, :busy}, state}
+  end
+
+  def handle_call({:reply_to_human, answer}, _from, %{status: :waiting, pending_human: pending} = state)
+      when not is_nil(pending) do
+    append(state.run, Events.tool_result(%{
+      "tool_call_id" => pending.tool_call_id,
+      "name" => "ask_human",
+      "content" => answer,
+      "is_error" => false,
+      "step" => state.step
+    }))
+
+    broadcast(state, :tool_result, %{
+      tool_call_id: pending.tool_call_id,
+      name: "ask_human",
+      content: answer
+    })
+
+    answer_result = %{
+      role: "tool",
+      tool_call_id: pending.tool_call_id,
+      name: "ask_human",
+      content: answer
+    }
+
+    all_results = pending.pending_results ++ [answer_result]
+    state = %{state | pending_human: nil}
+
+    case handle_pause_or_continue(state, pending.wait_blocks, [], all_results, pending.log_calls?) do
+      {:noreply, new_state} -> {:reply, :ok, new_state}
+      {:noreply, new_state, continue} -> {:reply, :ok, new_state, continue}
+    end
+  end
+
+  def handle_call({:reply_to_human, _answer}, _from, state) do
+    {:reply, {:error, :not_waiting}, state}
   end
 
   @impl true
@@ -236,6 +278,9 @@ defmodule Norns.Agents.Process do
     {wait_blocks, remaining} =
       Enum.split_with(tool_use_blocks, fn block -> block["name"] == "wait" end)
 
+    {ask_blocks, remaining} =
+      Enum.split_with(remaining, fn block -> block["name"] == "ask_human" end)
+
     {list_agents_blocks, remaining} =
       Enum.split_with(remaining, fn block -> block["name"] == "list_agents" end)
 
@@ -304,11 +349,12 @@ defmodule Norns.Agents.Process do
              tasks: Map.new(all_pending),
              results: Map.new(sync_results, fn r -> {r.tool_call_id, r} end),
              wait_blocks: wait_blocks,
+             ask_blocks: ask_blocks,
              log_calls?: log_calls?
            }
        }}
     else
-      handle_wait_or_continue(state, wait_blocks, sync_results, log_calls?)
+      handle_pause_or_continue(state, wait_blocks, ask_blocks, sync_results, log_calls?)
     end
   end
 
@@ -438,8 +484,42 @@ defmodule Norns.Agents.Process do
     %{role: "tool", tool_call_id: block["id"], name: name, content: error_msg, is_error: true}
   end
 
-  defp handle_wait_or_continue(state, wait_blocks, regular_results, log_calls?) do
+  defp handle_pause_or_continue(state, wait_blocks, ask_blocks, regular_results, log_calls?) do
     cond do
+      # Human input outranks a timer: a sleep can always be re-armed after the
+      # answer arrives, so carry any co-emitted wait blocks forward.
+      ask_blocks != [] ->
+        [ask_block | _] = ask_blocks
+        question = get_in(ask_block, ["arguments", "question"]) || ""
+
+        if log_calls? do
+          append(state.run, Events.tool_call(%{
+            "tool_call_id" => ask_block["id"],
+            "name" => "ask_human",
+            "arguments" => ask_block["arguments"],
+            "step" => state.step
+          }))
+        end
+
+        append(state.run, Events.build("waiting_for_user", %{
+          "tool_call_id" => ask_block["id"],
+          "question" => question,
+          "step" => state.step
+        }))
+
+        broadcast(state, :waiting_for_user, %{tool_call_id: ask_block["id"], question: question})
+
+        {:noreply,
+         %{state
+           | status: :waiting,
+             pending_human: %{
+               tool_call_id: ask_block["id"],
+               question: question,
+               pending_results: regular_results,
+               wait_blocks: wait_blocks,
+               log_calls?: log_calls?
+             }}}
+
       wait_blocks != [] ->
         [wait_block | _] = wait_blocks
         seconds = get_in(wait_block, ["arguments", "seconds"]) || 0
@@ -561,7 +641,14 @@ defmodule Norns.Agents.Process do
           all_results = Map.values(results)
 
           state = %{state | pending_tool_tasks: nil, task_timer: nil}
-          handle_wait_or_continue(state, pending.wait_blocks || [], all_results, pending.log_calls?)
+
+          handle_pause_or_continue(
+            state,
+            pending.wait_blocks || [],
+            pending.ask_blocks || [],
+            all_results,
+            pending.log_calls?
+          )
         else
           # Still waiting for more tools
           updated_pending = %{pending | tasks: remaining_tasks, results: results}
@@ -593,7 +680,7 @@ defmodule Norns.Agents.Process do
     all_results = pending_results ++ [wait_result]
     state = %{state | task_timer: nil}
 
-    handle_wait_or_continue(state, [], all_results, log_calls?)
+    handle_pause_or_continue(state, [], [], all_results, log_calls?)
   end
 
   def handle_info({:task_timeout, task_id}, %{pending_llm_task: task_id} = state) do
@@ -640,7 +727,7 @@ defmodule Norns.Agents.Process do
   end
 
   # Ignore child PubSub events when not awaiting tools
-  def handle_info({event, %{agent_id: _}}, state) when event in [:completed, :error, :agent_started, :llm_response, :tool_call, :tool_result, :waiting_timer] do
+  def handle_info({event, %{agent_id: _}}, state) when event in [:completed, :error, :agent_started, :llm_response, :tool_call, :tool_result, :waiting_timer, :waiting_for_user] do
     {:noreply, state}
   end
 
@@ -1077,7 +1164,9 @@ defmodule Norns.Agents.Process do
 
             {msgs, current_step, pending_calls ++ [synthetic_tc]}
 
-          "waiting_for_timer" ->
+          # Both pauses are re-derived from the still-pending tool call that
+          # caused them, so the event itself replays as a no-op.
+          type when type in ["waiting_for_timer", "waiting_for_user"] ->
             {msgs, current_step, pending_calls}
 
           type when type in ["checkpoint_saved", "checkpoint"] ->

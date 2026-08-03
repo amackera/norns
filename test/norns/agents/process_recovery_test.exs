@@ -112,6 +112,84 @@ defmodule Norns.Agents.ProcessRecoveryTest do
       # 1 from original + 1 from resume
       assert length(llm_requests) == 2
     end
+
+    test "a run parked on ask_human re-parks instead of resuming the loop", %{
+      tenant: tenant,
+      agent: agent
+    } do
+      {:ok, run} =
+        Runs.create_run(%{
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          trigger_type: "message",
+          input: %{"user_message" => "Buy me tickets"},
+          status: "running"
+        })
+
+      Runs.append_event(run, %{event_type: "run_started", source: "system"})
+
+      Runs.append_event(run, %{
+        event_type: "llm_response",
+        source: "system",
+        payload: %{
+          "content" => "",
+          "tool_calls" => [
+            %{"id" => "call_ask", "name" => "ask_human", "arguments" => %{"question" => "Book the 7pm show?"}}
+          ],
+          "finish_reason" => "tool_call",
+          "step" => 1,
+          "usage" => %{"input_tokens" => 10, "output_tokens" => 20}
+        }
+      })
+
+      Runs.append_event(run, %{
+        event_type: "tool_call",
+        source: "system",
+        payload: %{
+          "tool_call_id" => "call_ask",
+          "name" => "ask_human",
+          "arguments" => %{"question" => "Book the 7pm show?"},
+          "step" => 1
+        }
+      })
+
+      Runs.append_event(run, %{
+        event_type: "waiting_for_user",
+        source: "system",
+        payload: %{"tool_call_id" => "call_ask", "question" => "Book the 7pm show?", "step" => 1}
+      })
+
+      # "Crash" here — the question was never answered.
+
+      Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent.id}")
+
+      {:ok, pid} =
+        AgentProcess.start_link(
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          resume_run_id: run.id
+        )
+
+      # The question is re-asked so a waiting subscriber can answer it again.
+      assert_receive {:waiting_for_user, %{question: "Book the 7pm show?"}}, 5000
+
+      state = AgentProcess.get_state(pid)
+      assert state.status == :waiting
+
+      # It parked rather than calling the LLM again.
+      assert Runs.list_events(run.id)
+             |> Enum.count(&(&1.event_type == "llm_request")) == 0
+
+      # And it can still be answered after recovery.
+      Fake.set_responses([
+        %{content: [%{"type" => "text", "text" => "Booked."}], stop_reason: "end_turn"}
+      ])
+
+      assert :ok = AgentProcess.reply_to_human(pid, "yes")
+      assert_receive {:completed, _}, 5000
+
+      assert Runs.get_run!(run.id).status == "completed"
+    end
   end
 
   describe "rebuild_state/2" do

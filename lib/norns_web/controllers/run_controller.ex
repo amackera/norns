@@ -47,6 +47,31 @@ defmodule NornsWeb.RunController do
     end
   end
 
+  def reply(conn, %{"id" => id} = params) do
+    tenant = conn.assigns.current_tenant
+    answer = params["answer"]
+
+    with {:ok, run} <- fetch_run(id, tenant.id) do
+      if is_nil(answer) or not is_binary(answer) do
+        conn |> put_status(422) |> json(%{error: "answer is required"})
+      else
+        case Registry.reply_to_human(tenant.id, run, answer) do
+          :ok ->
+            conn |> put_status(202) |> json(%{status: "accepted", run_id: run.id})
+
+          {:error, :not_waiting} ->
+            conn |> put_status(409) |> json(%{error: "run is not waiting for input"})
+
+          {:error, :not_running} ->
+            conn |> put_status(409) |> json(%{error: "agent is not running"})
+
+          {:error, reason} ->
+            conn |> put_status(500) |> json(%{error: inspect(reason)})
+        end
+      end
+    end
+  end
+
   def events(conn, %{"id" => id}) do
     tenant = conn.assigns.current_tenant
 

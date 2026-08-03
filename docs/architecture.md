@@ -27,9 +27,17 @@ If a worker disconnects, pending tasks are queued and flushed when it reconnects
 Each agent is a GenServer managed by a DynamicSupervisor:
 
 - `:idle` — waiting for a message
+- `:running` — driving the LLM loop between dispatches
 - `:awaiting_llm` — dispatched LLM task, waiting for response
 - `:awaiting_tools` — dispatched tool tasks, waiting for results
-- `:waiting` — paused for human input (interrupt/resume)
+- `:waiting_timer` — paused on the `wait` builtin until a timer fires
+- `:waiting` — paused on the `ask_human` builtin until a human answers
+
+A run parked in `:waiting` stays parked indefinitely. Answer it with
+`POST /api/v1/runs/:id/reply` (`{"answer": "..."}`). Because the pause is
+re-derived from the still-pending `ask_human` tool call, a parked run that
+crashes re-parks on resume and re-broadcasts its question rather than
+resuming the LLM loop.
 
 The agent is never blocked — it always responds to status queries. Agent processes start automatically when a message is sent and stop when idle.
 

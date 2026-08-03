@@ -325,6 +325,7 @@ defmodule NornsWeb.AgentLive do
 
   defp status_color(%{status: :running}), do: "bg-green-400 animate-pulse-dot"
   defp status_color(%{status: :waiting_timer}), do: "bg-yellow-400 animate-pulse-dot"
+  defp status_color(%{status: :waiting}), do: "bg-amber-500 animate-pulse-dot"
   defp status_color(%{status: :idle}), do: "bg-blue-400"
   defp status_color(_), do: "bg-gray-400 dark:bg-gray-600"
 
