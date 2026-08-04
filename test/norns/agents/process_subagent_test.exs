@@ -303,4 +303,164 @@ defmodule Norns.Agents.ProcessSubagentTest do
       assert tool_result.payload["content"] =~ "not found"
     end
   end
+
+  describe "subagent policy" do
+    defp policy_agent(tenant, subagents) do
+      create_agent(tenant, %{
+        name: "policed-agent-#{System.unique_integer([:positive])}",
+        model_config: %{"subagents" => subagents}
+      })
+    end
+
+    defp launch_response(target, id \\ "call_launch") do
+      %{
+        content: [
+          %{
+            "type" => "tool_use",
+            "id" => id,
+            "name" => "launch_agent",
+            "input" => %{"agent_name" => target, "message" => "do it"}
+          }
+        ],
+        stop_reason: "tool_use"
+      }
+    end
+
+    defp list_response(id \\ "call_list") do
+      %{
+        content: [%{"type" => "tool_use", "id" => id, "name" => "list_agents", "input" => %{}}],
+        stop_reason: "tool_use"
+      }
+    end
+
+    defp done_response, do: %{content: [%{"type" => "text", "text" => "ok"}], stop_reason: "end_turn"}
+
+    defp run_events(pid) do
+      state = AgentProcess.get_state(pid)
+      Runs.list_events(state.run_id)
+    end
+
+    defp launch_tool_result(events) do
+      Enum.find(events, &(&1.event_type == "tool_result" && &1.payload["name"] == "launch_agent"))
+    end
+
+    test "open mode can launch a same-tenant agent", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-open"})
+      agent = policy_agent(tenant, %{"mode" => "open"})
+
+      Fake.set_responses([launch_response(target.name), done_response(), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      assert Enum.any?(events, &(&1.event_type == "subagent_launch_allowed"))
+      refute Enum.any?(events, &(&1.event_type == "subagent_launch_denied"))
+    end
+
+    test "allowlist mode allows a listed target", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-listed"})
+      agent = policy_agent(tenant, %{"mode" => "allowlist", "allowed_agents" => [target.name]})
+
+      Fake.set_responses([launch_response(target.name), done_response(), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      assert Enum.any?(run_events(pid), &(&1.event_type == "subagent_launch_allowed"))
+    end
+
+    test "allowlist mode denies an unlisted target", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-unlisted"})
+      agent = policy_agent(tenant, %{"mode" => "allowlist", "allowed_agents" => ["someone-else"]})
+
+      Fake.set_responses([launch_response(target.name), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      denied = Enum.find(events, &(&1.event_type == "subagent_launch_denied"))
+
+      assert denied.payload["reason"] == "not_allowlisted"
+      assert denied.payload["target_agent_name"] == target.name
+      assert denied.payload["mode"] == "allowlist"
+      assert denied.payload["requesting_agent_id"] == agent.id
+
+      assert launch_tool_result(events).payload["is_error"] == true
+    end
+
+    test "disabled mode denies any launch", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-disabled"})
+      agent = policy_agent(tenant, %{"mode" => "disabled"})
+
+      Fake.set_responses([launch_response(target.name), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      denied = Enum.find(events, &(&1.event_type == "subagent_launch_denied"))
+
+      assert denied.payload["reason"] == "disabled"
+      assert launch_tool_result(events).payload["content"] =~ "not permitted"
+    end
+
+    test "a cross-tenant target is never launchable", %{tenant: tenant} do
+      other_tenant = create_tenant()
+      foreign = create_agent(other_tenant, %{name: "foreign-agent"})
+      agent = policy_agent(tenant, %{"mode" => "open"})
+
+      Fake.set_responses([launch_response(foreign.name), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      result = launch_tool_result(run_events(pid))
+      assert result.payload["is_error"] == true
+      assert result.payload["content"] =~ "not found"
+    end
+
+    test "allow_list_agents=false denies listing", %{tenant: tenant} do
+      _other = create_agent(tenant, %{name: "visible-agent"})
+      agent = policy_agent(tenant, %{"allow_list_agents" => false})
+
+      Fake.set_responses([list_response(), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "who is there")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      denied = Enum.find(events, &(&1.event_type == "subagent_list_denied"))
+
+      assert denied.payload["reason"] == "list_agents_disabled"
+
+      result = Enum.find(events, &(&1.event_type == "tool_result" && &1.payload["name"] == "list_agents"))
+      assert result.payload["is_error"] == true
+      refute result.payload["content"] =~ "visible-agent"
+    end
+
+    test "listing is allowed by default and audited", %{tenant: tenant} do
+      _other = create_agent(tenant, %{name: "listable-agent"})
+      agent = policy_agent(tenant, %{"mode" => "open"})
+
+      Fake.set_responses([list_response(), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "who is there")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      assert Enum.any?(events, &(&1.event_type == "subagent_list_allowed"))
+
+      result = Enum.find(events, &(&1.event_type == "tool_result" && &1.payload["name"] == "list_agents"))
+      assert result.payload["content"] =~ "listable-agent"
+    end
+  end
 end

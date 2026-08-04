@@ -95,7 +95,41 @@ All state is captured as versioned, validated events (`schema_version: 1`). Even
 - **Tools:** `tool_call`, `tool_result`, `tool_duplicate`
 - **Checkpointing:** `checkpoint_saved`
 - **Human-in-the-loop:** `waiting_for_user`, `user_response`
+- **Sub-agents:** `subagent_launched`, `subagent_launch_allowed`, `subagent_launch_denied`, `subagent_list_allowed`, `subagent_list_denied`
 - **Retry:** `retry`
+
+### Sub-agent authorization
+
+`launch_agent` and `list_agents` are authorized server-side, in the built-in
+tool path — not by prompting. Policy lives in the agent's `model_config`:
+
+```json
+{
+  "subagents": {
+    "mode": "allowlist",
+    "allowed_agents": ["hello-bot"],
+    "allow_list_agents": false
+  }
+}
+```
+
+| Mode | `launch_agent` |
+|------|----------------|
+| `open` (default) | any agent in the same tenant |
+| `allowlist` | only agents named in `allowed_agents` |
+| `disabled` | denied |
+
+`allow_list_agents` (default `true`) controls `list_agents`. Agent lookup is
+tenant-scoped, so a cross-tenant target is never launchable regardless of mode.
+
+Every decision — allowed or denied — is recorded as an event carrying
+`requesting_agent_id`, `requesting_agent_name`, `mode`, the `target_agent_name`
+where applicable, and a `reason` code on denials (`disabled`,
+`not_allowlisted`, `list_agents_disabled`). Denials also return an error tool
+result, so the model learns it was refused rather than silently losing the call.
+
+Defaults are permissive, so agents without a `subagents` block behave exactly as
+before.
 
 ### Error Classification
 

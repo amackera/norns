@@ -1,7 +1,13 @@
 # Plan: Subagent Discovery/Launch Guardrails (Allowlist Model)
 
-Last updated: 2026-03-30
-Status: Proposed
+Last updated: 2026-08-04
+Status: Phase 1 implemented; Phases 2–3 proposed
+
+Phase 1 shipped in `Norns.Agents.SubagentPolicy`, enforced in `process.ex` for
+both built-ins, with the four audit events and the full test plan below covered
+in `test/norns/agents/process_subagent_test.exs`. Defaults remain `open` /
+`allow_list_agents: true`, so existing agents are unaffected. See
+`architecture.md` for the user-facing description.
 
 ## Context
 
@@ -96,13 +102,13 @@ Later we can support global runtime defaults with per-agent override.
 
 ## Implementation phases
 
-### Phase 1 — Non-breaking controls
+### Phase 1 — Non-breaking controls (done)
 
-- Add config parsing for `subagents.mode`, `allowed_agents`, `allow_list_agents`
-- Implement enforcement checks in built-in tools
-- Keep default behavior equivalent to current (`open`)
-- Add allow/deny events
-- Add tests for open/allowlist/disabled paths
+- [x] Add config parsing for `subagents.mode`, `allowed_agents`, `allow_list_agents`
+- [x] Implement enforcement checks in built-in tools
+- [x] Keep default behavior equivalent to current (`open`)
+- [x] Add allow/deny events
+- [x] Add tests for open/allowlist/disabled paths
 
 ### Phase 2 — Safer production posture
 

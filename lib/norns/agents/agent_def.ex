@@ -13,7 +13,8 @@ defmodule Norns.Agents.AgentDef do
     tools: [],
     checkpoint_policy: :on_tool_call,
     max_steps: 50,
-    on_failure: :stop
+    on_failure: :stop,
+    subagents: %Norns.Agents.SubagentPolicy{}
   ]
 
   @type context_strategy :: :sliding_window | :none
@@ -28,7 +29,8 @@ defmodule Norns.Agents.AgentDef do
           tools: [Norns.Tools.Tool.t()],
           checkpoint_policy: checkpoint_policy(),
           max_steps: pos_integer(),
-          on_failure: failure_policy()
+          on_failure: failure_policy(),
+          subagents: Norns.Agents.SubagentPolicy.t()
         }
 
   @current_version 1
@@ -84,7 +86,8 @@ defmodule Norns.Agents.AgentDef do
       tools: module_tools ++ extra_tools,
       max_steps: agent.max_steps || 50,
       checkpoint_policy: parse_checkpoint_policy(config),
-      on_failure: parse_failure_policy(config)
+      on_failure: parse_failure_policy(config),
+      subagents: Norns.Agents.SubagentPolicy.from_config(config)
     }
   end
 

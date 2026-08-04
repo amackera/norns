@@ -9,7 +9,7 @@ defmodule Norns.Agents.Process do
   require Logger
 
   alias Norns.{Agents, Conversations, Runs, Tenants}
-  alias Norns.Agents.AgentDef
+  alias Norns.Agents.{AgentDef, SubagentPolicy}
   alias Norns.Runtime.{ErrorPolicy, Errors, Events}
   alias Norns.Workers.WorkerRegistry
   alias Norns.Tools.{Builtins, Idempotency, Tool}
@@ -385,26 +385,57 @@ defmodule Norns.Agents.Process do
         }))
       end
 
-      agents = Agents.list_agents(state.tenant_id)
+      policy = state.agent_def.subagents
 
-      result =
-        agents
-        |> Enum.reject(&(&1.id == state.agent_id))
-        |> Enum.map(fn a -> %{"name" => a.name, "purpose" => a.purpose || ""} end)
-        |> Jason.encode!()
+      case SubagentPolicy.authorize_list(policy) do
+        {:error, reason} ->
+          append_subagent_decision(state, "subagent_list_denied", policy, nil, reason)
 
-      append(state.run, Events.tool_result(%{
-        "tool_call_id" => block["id"],
-        "name" => "list_agents",
-        "content" => result,
-        "is_error" => false,
-        "step" => state.step
-      }))
+          make_error_tool_result(
+            state,
+            block,
+            "list_agents",
+            "Listing agents is not permitted for this agent."
+          )
 
-      broadcast(state, :tool_result, %{tool_call_id: block["id"], name: "list_agents", content: result})
+        :ok ->
+          append_subagent_decision(state, "subagent_list_allowed", policy, nil, nil)
 
-      %{role: "tool", tool_call_id: block["id"], name: "list_agents", content: result}
+          result =
+            state.tenant_id
+            |> Agents.list_agents()
+            |> Enum.reject(&(&1.id == state.agent_id))
+            |> Enum.map(fn a -> %{"name" => a.name, "purpose" => a.purpose || ""} end)
+            |> Jason.encode!()
+
+          append(state.run, Events.tool_result(%{
+            "tool_call_id" => block["id"],
+            "name" => "list_agents",
+            "content" => result,
+            "is_error" => false,
+            "step" => state.step
+          }))
+
+          broadcast(state, :tool_result, %{tool_call_id: block["id"], name: "list_agents", content: result})
+
+          %{role: "tool", tool_call_id: block["id"], name: "list_agents", content: result}
+      end
     end)
+  end
+
+  # Audit trail for every subagent permission decision, allowed or denied.
+  defp append_subagent_decision(state, event_type, policy, target_name, reason) do
+    payload = %{
+      "requesting_agent_id" => state.agent_id,
+      "requesting_agent_name" => (state.agent && state.agent.name) || "",
+      "mode" => to_string(policy.mode),
+      "step" => state.step
+    }
+
+    payload = if target_name, do: Map.put(payload, "target_agent_name", target_name), else: payload
+    payload = if reason, do: Map.put(payload, "reason", reason), else: payload
+
+    append(state.run, Events.build(event_type, payload))
   end
 
   defp resolve_launch_agents(state, blocks, log_calls?) do
@@ -422,9 +453,25 @@ defmodule Norns.Agents.Process do
       message = get_in(block, ["arguments", "message"]) || ""
       context = get_in(block, ["arguments", "context"])
 
+      # Lookup is tenant-scoped, so a cross-tenant target reads as not found.
       child_agent = Agents.get_agent_by_name(st.tenant_id, agent_name)
+      policy = st.agent_def.subagents
+      authorization = SubagentPolicy.authorize_launch(policy, agent_name)
 
       cond do
+        match?({:error, _}, authorization) ->
+          {:error, reason} = authorization
+          append_subagent_decision(st, "subagent_launch_denied", policy, agent_name, reason)
+
+          error_msg =
+            case reason do
+              "disabled" -> "This agent is not permitted to launch sub-agents."
+              _ -> "Agent '#{agent_name}' is not in this agent's allowed sub-agents."
+            end
+
+          result = make_error_tool_result(st, block, "launch_agent", error_msg)
+          {results ++ [result], pending, st}
+
         is_nil(child_agent) ->
           error_msg = "Agent '#{agent_name}' not found"
           result = make_error_tool_result(st, block, "launch_agent", error_msg)
@@ -436,6 +483,8 @@ defmodule Norns.Agents.Process do
           {results ++ [result], pending, st}
 
         true ->
+          append_subagent_decision(st, "subagent_launch_allowed", policy, agent_name, nil)
+
           # Subscribe to child agent events
           Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{child_agent.id}")
 
