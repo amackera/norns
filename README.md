@@ -84,7 +84,7 @@ def search_docs(query: str) -> str:
 
 agent = Agent(
     name="support-bot",
-    model="claude-sonnet-4-20250514",
+    model="claude-sonnet-5",
     system_prompt="You are a support assistant.",
     tools=[search_docs],
 )

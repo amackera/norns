@@ -7,7 +7,7 @@ defmodule Norns.Agents.Agent do
     field :purpose, :string
     field :status, :string, default: "inactive"
     field :system_prompt, :string
-    field :model, :string, default: "claude-sonnet-4-20250514"
+    field :model, :string, default: "claude-sonnet-5"
     field :model_config, :map, default: %{}
     field :tools_config, :map, default: %{}
     field :max_steps, :integer, default: 50

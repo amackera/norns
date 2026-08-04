@@ -89,7 +89,7 @@ defmodule NornsWeb.AgentsLive do
               </div>
               <div>
                 <label class="text-xs text-gray-500 block mb-1">Model</label>
-                <input type="text" name="model" value="claude-sonnet-4-20250514" placeholder="claude-sonnet-4-20250514"
+                <input type="text" name="model" value="claude-sonnet-5" placeholder="claude-sonnet-5"
                   class="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-gray-500" />
               </div>
             </div>
@@ -151,7 +151,7 @@ defmodule NornsWeb.AgentsLive do
       tenant_id: tenant.id,
       name: String.trim(params["name"] || ""),
       system_prompt: String.trim(params["system_prompt"] || ""),
-      model: String.trim(params["model"] || "claude-sonnet-4-20250514"),
+      model: String.trim(params["model"] || "claude-sonnet-5"),
       status: "idle"
     }
 
