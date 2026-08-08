@@ -103,6 +103,10 @@ result = client.send_message("support-bot", "Where is my order?", wait=True)
 print(result.output)
 ```
 
+## Where this is going
+
+The direction is an agent builder: describe an agent, get a running durable one. The model that makes that possible: **tools are infrastructure, agents are configuration.** Workers form a tenant's long-lived capability layer (the Slack worker, the DB worker); agents are cheap data — prompt, model, tool selection, triggers — composed on top through the API without deploying anything. The near-term roadmap builds the primitives that story needs: per-agent tool selection, cron triggers, worker affinity ([gards](docs/gards.md)), and project templates. See [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
+
 ## Status
 
 Norns is v0.x. The runtime, SDKs, and CLI work and are in active development. APIs are stabilizing; breaking changes will be noted in releases. Pin versions if you're using this in production.

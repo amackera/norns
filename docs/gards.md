@@ -1,6 +1,6 @@
 # Norns Gards — Design Document
 
-## Status: Draft (v4)
+## Status: Draft (v5) — Phase 1 is next up (`roadmap.md` step 3); the provisioner is on the critical path per the fork decision in `decision-log.md`
 
 ## Summary
 
@@ -53,6 +53,8 @@ That's it.
 ```
   - Creates infrastructure (Docker containers, VMs, bare directories)
   - Calls Norns API to register a gard
+  - Injects secrets into the gard as env vars (worker credentials:
+    Slack tokens, DB creds, LLM keys — never stored in Norns)
   - Starts a worker inside the gard
   - Worker connects to Norns, claims the gard
   - Sets up tunnels for port exposure (remote case)
@@ -799,10 +801,11 @@ The provisioner is NOT part of Norns. It's a separate CLI/service.
 
 1. **Create gard record** — `POST /api/gards`, receives `id` + `claim_token`
 2. **Create infrastructure** — Docker container, VM, or local directory
-3. **Start worker** — passes `gard_id` and `claim_token`, worker connects to Norns
-4. **Set up port exposure** — tunnels for remote, direct for local
-5. **Handle code extraction** — git push, file copy, artifact upload
-6. **Handle teardown** — stop worker, destroy infra, `DELETE /api/gards`
+3. **Inject secrets** — worker credentials (Slack tokens, DB creds, LLM keys) as env vars into the gard. Norns never stores them; the human supplies them to the provisioner. Required by the agent-builder flow (`plan-agent-builder.md`), so the Phase 1 schema must not preclude it.
+4. **Start worker** — passes `gard_id` and `claim_token`, worker connects to Norns
+5. **Set up port exposure** — tunnels for remote, direct for local
+6. **Handle code extraction** — git push, file copy, artifact upload
+7. **Handle teardown** — stop worker, destroy infra, `DELETE /api/gards`
 
 ### Network Note
 

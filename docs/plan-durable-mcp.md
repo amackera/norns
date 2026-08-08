@@ -1,5 +1,9 @@
 # Durable MCP — Implementation Plan
 
+**Status: Parked (2026-08-08).** The fork went to owning the provisioner — see
+`decision-log.md` and `roadmap.md`. This plan remains Phase 0 for
+`plan-custom-agent-workflows.md` whenever the durability branch is picked up.
+
 ## Vision
 
 Make MCP tool calls crash-safe, exactly-once, and replayable — without changing agent code or MCP servers. A developer using any agent framework (LangGraph, Claude Code, custom) drops in `DurableMCP` and their tool calls survive process death.
