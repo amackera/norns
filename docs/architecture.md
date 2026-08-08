@@ -228,6 +228,31 @@ output:
 The `run_id` lets a parent inspect *how* a sub-agent reached its answer through
 the run's event log, not just what it said.
 
+### Recovering a parent that was awaiting a sub-agent
+
+A pending `launch_agent` is re-dispatched on resume like any other tool call,
+but it must not re-run: the child is the expensive half of a delegation, and
+the parent's event log already names the run it started.
+
+So `subagent_launched` tags the pending call with its `child_run_id`, and
+resume reattaches instead of relaunching. If the child is already `completed`
+or `failed`, its result is synthesized from the run row. If it's still in
+flight, the parent subscribes and waits — and resumes the child itself if no
+process is behind it, since a partial crash can leave the parent recovered and
+the child not.
+
+The parent subscribes before reading the child's status, so a child that
+finishes in that window is caught by the broadcast rather than missed. Both
+paths firing is fine: the first resolution clears the pending call and the
+second is dropped.
+
+Pending sub-agents are tracked by child *run* id. One step can launch the same
+agent twice, and the completion broadcast is per-agent, so the run id is the
+only thing that tells the two results apart.
+
+If the child run is gone entirely, the call returns an error. Relaunching would
+look like recovery while quietly paying for the work a second time.
+
 ### Error Classification
 
 | Class | Example | Retry behavior |

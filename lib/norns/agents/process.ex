@@ -460,133 +460,206 @@ defmodule Norns.Agents.Process do
   end
 
   defp resolve_launch_agents(state, blocks, log_calls?) do
-    Enum.reduce(blocks, {[], [], state}, fn block, {results, pending, st} ->
-      if log_calls? do
-        append(st.run, Events.tool_call(%{
-          "tool_call_id" => block["id"],
-          "name" => "launch_agent",
-          "arguments" => block["arguments"] || %{},
-          "step" => st.step
-        }))
+    Enum.reduce(blocks, {[], [], state}, fn block, acc ->
+      case block["child_run_id"] do
+        nil -> launch_subagent(block, log_calls?, acc)
+        child_run_id -> reattach_subagent(block, child_run_id, acc)
       end
+    end)
+  end
 
-      agent_name = get_in(block, ["arguments", "agent_name"]) || ""
-      message = get_in(block, ["arguments", "message"]) || ""
-      context = get_in(block, ["arguments", "context"])
+  # Replay tagged this call with the run it already started, so the child exists
+  # and may well have finished. Relaunching would pay for its work a second time
+  # and orphan the run the parent's own event log points at.
+  defp reattach_subagent(block, child_run_id, {results, pending, st}) do
+    case Runs.get_run(child_run_id) do
+      nil ->
+        error_msg =
+          "Sub-agent run #{child_run_id} no longer exists, so its result cannot be recovered."
 
-      # Lookup is tenant-scoped, so a cross-tenant target reads as not found.
-      child_agent = Agents.get_agent_by_name(st.tenant_id, agent_name)
-      policy = st.agent_def.subagents
-      authorization = SubagentPolicy.authorize_launch(policy, agent_name)
+        {results ++ [make_error_tool_result(st, block, "launch_agent", error_msg)], pending, st}
 
-      # Absolute depth from the root run, not distance from this agent.
-      child_depth = (st.run && st.run.depth && st.run.depth + 1) || 1
-      depth_authorization = SubagentPolicy.authorize_depth(policy, child_depth)
+      child_run ->
+        # Subscribe before reading the status: if the child finishes in the gap
+        # the broadcast still reaches us, and if it finished earlier the row
+        # tells us. Both firing is harmless — the second finds no pending entry.
+        Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{child_run.agent_id}")
+        reattach_to_status(block, Runs.get_run!(child_run_id), {results, pending, st})
+    end
+  end
 
-      cond do
-        match?({:error, _}, authorization) ->
-          {:error, reason} = authorization
-          append_subagent_decision(st, "subagent_launch_denied", policy, agent_name, reason)
+  defp reattach_to_status(block, %{status: "completed"} = child_run, {results, pending, st}) do
+    content = subagent_result(child_run.id, "completed", %{"output" => child_run.output || ""})
+    {results ++ [make_tool_result(st, block, "launch_agent", content, false)], pending, st}
+  end
 
-          error_msg =
-            case reason do
-              "disabled" -> "This agent is not permitted to launch sub-agents."
-              _ -> "Agent '#{agent_name}' is not in this agent's allowed sub-agents."
-            end
+  defp reattach_to_status(block, %{status: "failed"} = child_run, {results, pending, st}) do
+    error = get_in(child_run.failure_metadata, ["error"]) || "sub-agent run failed"
+    content = subagent_result(child_run.id, "failed", %{"error" => error})
+    {results ++ [make_tool_result(st, block, "launch_agent", content, true)], pending, st}
+  end
 
-          result = make_error_tool_result(st, block, "launch_agent", error_msg)
-          {results ++ [result], pending, st}
+  defp reattach_to_status(block, child_run, {results, pending, st}) do
+    ensure_child_running(child_run)
+    task_id = "subagent_#{block["id"]}"
 
-        match?({:error, _}, depth_authorization) ->
-          append_subagent_decision(st, "subagent_launch_denied", policy, agent_name, "max_depth")
+    st =
+      put_in(st.pending_subagents[child_run.id], %{
+        task_id: task_id,
+        run_id: child_run.id,
+        tool_call_id: block["id"]
+      })
 
-          error_msg =
-            "Sub-agent nesting limit reached (max depth #{policy.max_depth}). " <>
-              "Do the work in this agent instead of delegating further."
+    {results, pending ++ [{task_id, block}], st}
+  end
 
-          result = make_error_tool_result(st, block, "launch_agent", error_msg)
-          {results ++ [result], pending, st}
+  # A partial crash can leave the parent resumed and the child not. Nothing else
+  # will restart it, so the parent would wait out the task timeout for a result
+  # no process is going to produce.
+  defp ensure_child_running(child_run) do
+    conversation_key = (child_run.conversation && child_run.conversation.key) || "default"
 
-        is_nil(child_agent) ->
-          error_msg = "Agent '#{agent_name}' not found"
-          result = make_error_tool_result(st, block, "launch_agent", error_msg)
-          {results ++ [result], pending, st}
+    if Norns.Agents.Registry.alive?(child_run.tenant_id, child_run.agent_id, conversation_key) do
+      :ok
+    else
+      Norns.Agents.Registry.resume_agent(child_run.id, child_run.agent_id, child_run.tenant_id,
+        conversation_key: conversation_key
+      )
+    end
+  end
 
-        child_agent.id == st.agent_id ->
-          error_msg = "Cannot launch self as a sub-agent"
-          result = make_error_tool_result(st, block, "launch_agent", error_msg)
-          {results ++ [result], pending, st}
+  defp launch_subagent(block, log_calls?, {results, pending, st}) do
+    if log_calls? do
+      append(st.run, Events.tool_call(%{
+        "tool_call_id" => block["id"],
+        "name" => "launch_agent",
+        "arguments" => block["arguments"] || %{},
+        "step" => st.step
+      }))
+    end
 
-        true ->
-          append_subagent_decision(st, "subagent_launch_allowed", policy, agent_name, nil)
+    agent_name = get_in(block, ["arguments", "agent_name"]) || ""
+    message = get_in(block, ["arguments", "message"]) || ""
+    context = get_in(block, ["arguments", "context"])
 
-          # Subscribe to child agent events
-          Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{child_agent.id}")
+    # Lookup is tenant-scoped, so a cross-tenant target reads as not found.
+    child_agent = Agents.get_agent_by_name(st.tenant_id, agent_name)
+    policy = st.agent_def.subagents
+    authorization = SubagentPolicy.authorize_launch(policy, agent_name)
 
-          conversation_key = "subagent_#{block["id"]}_#{System.unique_integer([:positive])}"
+    # Absolute depth from the root run, not distance from this agent.
+    child_depth = (st.run && st.run.depth && st.run.depth + 1) || 1
+    depth_authorization = SubagentPolicy.authorize_depth(policy, child_depth)
 
-          spawn_opts = [
-            conversation_key: conversation_key,
-            parent_run_id: st.run && st.run.id,
-            depth: child_depth
-          ]
+    cond do
+      match?({:error, _}, authorization) ->
+        {:error, reason} = authorization
+        append_subagent_decision(st, "subagent_launch_denied", policy, agent_name, reason)
 
-          spawn_opts = if context, do: Keyword.put(spawn_opts, :context, context), else: spawn_opts
+        error_msg =
+          case reason do
+            "disabled" -> "This agent is not permitted to launch sub-agents."
+            _ -> "Agent '#{agent_name}' is not in this agent's allowed sub-agents."
+          end
 
-          case Norns.Agents.Registry.send_message(st.tenant_id, child_agent.id, message, spawn_opts) do
-            {:ok, child_run_id} ->
-              task_id = "subagent_#{block["id"]}"
+        result = make_error_tool_result(st, block, "launch_agent", error_msg)
+        {results ++ [result], pending, st}
 
-              launched_payload = %{
-                "tool_call_id" => block["id"],
-                "child_agent_name" => agent_name,
-                "child_run_id" => to_string(child_run_id),
-                "step" => st.step
-              }
-              launched_payload = if context, do: Map.put(launched_payload, "context", context), else: launched_payload
+      match?({:error, _}, depth_authorization) ->
+        append_subagent_decision(st, "subagent_launch_denied", policy, agent_name, "max_depth")
 
-              append(st.run, Events.subagent_launched(launched_payload))
+        error_msg =
+          "Sub-agent nesting limit reached (max depth #{policy.max_depth}). " <>
+            "Do the work in this agent instead of delegating further."
 
-              broadcast(st, :tool_call, %{name: "launch_agent", arguments: block["arguments"]})
+        result = make_error_tool_result(st, block, "launch_agent", error_msg)
+        {results ++ [result], pending, st}
 
-              # Synthetic tool_call block for pending task tracking
-              synthetic_tc = %{
-                "id" => block["id"],
-                "name" => "launch_agent",
-                "arguments" => block["arguments"]
-              }
+      is_nil(child_agent) ->
+        error_msg = "Agent '#{agent_name}' not found"
+        result = make_error_tool_result(st, block, "launch_agent", error_msg)
+        {results ++ [result], pending, st}
 
-              new_subagents = Map.put(st.pending_subagents, child_agent.id, %{
+      child_agent.id == st.agent_id ->
+        error_msg = "Cannot launch self as a sub-agent"
+        result = make_error_tool_result(st, block, "launch_agent", error_msg)
+        {results ++ [result], pending, st}
+
+      true ->
+        append_subagent_decision(st, "subagent_launch_allowed", policy, agent_name, nil)
+
+        # Subscribe to child agent events
+        Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{child_agent.id}")
+
+        conversation_key = "subagent_#{block["id"]}_#{System.unique_integer([:positive])}"
+
+        spawn_opts = [
+          conversation_key: conversation_key,
+          parent_run_id: st.run && st.run.id,
+          depth: child_depth
+        ]
+
+        spawn_opts = if context, do: Keyword.put(spawn_opts, :context, context), else: spawn_opts
+
+        case Norns.Agents.Registry.send_message(st.tenant_id, child_agent.id, message, spawn_opts) do
+          {:ok, child_run_id} ->
+            task_id = "subagent_#{block["id"]}"
+
+            launched_payload = %{
+              "tool_call_id" => block["id"],
+              "child_agent_name" => agent_name,
+              "child_run_id" => to_string(child_run_id),
+              "step" => st.step
+            }
+
+            launched_payload =
+              if context, do: Map.put(launched_payload, "context", context), else: launched_payload
+
+            append(st.run, Events.subagent_launched(launched_payload))
+
+            broadcast(st, :tool_call, %{name: "launch_agent", arguments: block["arguments"]})
+
+            # Synthetic tool_call block for pending task tracking
+            synthetic_tc = %{
+              "id" => block["id"],
+              "name" => "launch_agent",
+              "arguments" => block["arguments"]
+            }
+
+            st =
+              put_in(st.pending_subagents[child_run_id], %{
                 task_id: task_id,
                 run_id: child_run_id,
                 tool_call_id: block["id"]
               })
 
-              st = %{st | pending_subagents: new_subagents}
+            {results, pending ++ [{task_id, synthetic_tc}], st}
 
-              {results, pending ++ [{task_id, synthetic_tc}], st}
-
-            {:error, reason} ->
-              error_msg = "Failed to launch agent '#{agent_name}': #{inspect(reason)}"
-              result = make_error_tool_result(st, block, "launch_agent", error_msg)
-              {results ++ [result], pending, st}
-          end
-      end
-    end)
+          {:error, reason} ->
+            error_msg = "Failed to launch agent '#{agent_name}': #{inspect(reason)}"
+            result = make_error_tool_result(st, block, "launch_agent", error_msg)
+            {results ++ [result], pending, st}
+        end
+    end
   end
 
   defp make_error_tool_result(state, block, name, error_msg) do
+    make_tool_result(state, block, name, error_msg, true)
+  end
+
+  defp make_tool_result(state, block, name, content, is_error?) do
     append(state.run, Events.tool_result(%{
       "tool_call_id" => block["id"],
       "name" => name,
-      "content" => error_msg,
-      "is_error" => true,
+      "content" => content,
+      "is_error" => is_error?,
       "step" => state.step
     }))
 
-    broadcast(state, :tool_result, %{tool_call_id: block["id"], name: name, content: error_msg})
+    broadcast(state, :tool_result, %{tool_call_id: block["id"], name: name, content: content})
 
-    %{role: "tool", tool_call_id: block["id"], name: name, content: error_msg, is_error: true}
+    result = %{role: "tool", tool_call_id: block["id"], name: name, content: content}
+    if is_error?, do: Map.put(result, :is_error, true), else: result
   end
 
   defp handle_pause_or_continue(state, wait_blocks, ask_blocks, regular_results, log_calls?) do
@@ -813,32 +886,35 @@ defmodule Norns.Agents.Process do
   end
 
   # Child agent completed — convert to task_result for existing pipeline
-  def handle_info({:completed, %{agent_id: child_id, output: output}}, %{status: :awaiting_tools} = state) do
-    case find_subagent_task(state, child_id) do
-      %{task_id: task_id, run_id: run_id} ->
-        send(self(), {:task_result, task_id, {:ok, subagent_result(run_id, "completed", %{"output" => output || ""})}})
-        {:noreply, %{state | pending_subagents: Map.delete(state.pending_subagents, child_id)}}
-
-      nil ->
-        {:noreply, state}
-    end
+  def handle_info({:completed, %{run_id: child_run_id, output: output}}, %{status: :awaiting_tools} = state) do
+    {:noreply,
+     resolve_subagent(state, child_run_id, fn ->
+       {:ok, subagent_result(child_run_id, "completed", %{"output" => output || ""})}
+     end)}
   end
 
   # Child agent failed — convert to task_result error
-  def handle_info({:error, %{agent_id: child_id, error: error}}, %{status: :awaiting_tools} = state) do
-    case find_subagent_task(state, child_id) do
-      %{task_id: task_id, run_id: run_id} ->
-        payload = subagent_result(run_id, "failed", %{"error" => to_string(error)})
-        send(self(), {:task_result, task_id, {:error, payload}})
-        {:noreply, %{state | pending_subagents: Map.delete(state.pending_subagents, child_id)}}
-
-      nil ->
-        {:noreply, state}
-    end
+  def handle_info({:error, %{run_id: child_run_id, error: error}}, %{status: :awaiting_tools} = state) do
+    {:noreply,
+     resolve_subagent(state, child_run_id, fn ->
+       {:error, subagent_result(child_run_id, "failed", %{"error" => to_string(error)})}
+     end)}
   end
 
-  # Ignore child PubSub events when not awaiting tools
-  def handle_info({event, %{agent_id: _}}, state) when event in [:completed, :error, :agent_started, :llm_response, :tool_call, :tool_result, :waiting_timer, :waiting_for_user] do
+  # Ignore child PubSub events we don't act on. A reattached child is resumed
+  # by its parent, so `:agent_resumed` reaches us too.
+  def handle_info({event, %{agent_id: _}}, state)
+      when event in [
+             :completed,
+             :error,
+             :agent_started,
+             :agent_resumed,
+             :llm_response,
+             :tool_call,
+             :tool_result,
+             :waiting_timer,
+             :waiting_for_user
+           ] do
     {:noreply, state}
   end
 
@@ -1151,12 +1227,16 @@ defmodule Norns.Agents.Process do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
+  # `run_id` identifies *which* run of this agent emitted the event. A parent
+  # awaiting two concurrent launches of the same child agent can only tell the
+  # results apart by run, and the topic is per-agent.
   defp broadcast(state, event, payload) do
-    Phoenix.PubSub.broadcast(
-      Norns.PubSub,
-      "agent:#{state.agent_id}",
-      {event, Map.put(payload, :agent_id, state.agent_id)}
-    )
+    payload =
+      payload
+      |> Map.put(:agent_id, state.agent_id)
+      |> Map.put(:run_id, state.run && state.run.id)
+
+    Phoenix.PubSub.broadcast(Norns.PubSub, "agent:#{state.agent_id}", {event, payload})
   end
 
   # -- State Reconstruction --
@@ -1264,16 +1344,7 @@ defmodule Norns.Agents.Process do
             {msgs, current_step, remove_pending_tool_call(pending_calls, event.payload["tool_call_id"])}
 
           "subagent_launched" ->
-            # Track as a pending tool call so it gets re-dispatched on resume
-            synthetic_tc = %{
-              "id" => event.payload["tool_call_id"],
-              "name" => "launch_agent",
-              "arguments" => %{
-                "agent_name" => event.payload["child_agent_name"]
-              }
-            }
-
-            {msgs, current_step, pending_calls ++ [synthetic_tc]}
+            {msgs, current_step, track_subagent_launch(pending_calls, event.payload)}
 
           # Both pauses are re-derived from the still-pending tool call that
           # caused them, so the event itself replays as a no-op.
@@ -1309,8 +1380,72 @@ defmodule Norns.Agents.Process do
     Enum.reject(pending_calls, fn tc -> tc["id"] == tool_call_id end)
   end
 
-  defp find_subagent_task(state, child_agent_id) do
-    Map.get(state.pending_subagents, child_agent_id)
+  # Tag the pending launch with the run it already started, so resume reattaches
+  # to that child instead of spawning a second one.
+  #
+  # Under the default `:on_tool_call` checkpoint policy the call is already
+  # pending, carried over from the `llm_response` that requested it — appending
+  # here as well is what used to dispatch the launch twice. Under `:every_step`
+  # a checkpoint lands between the response and the launch and clears the
+  # pending list, so there we do have to synthesize the call back. The
+  # arguments are lost in that case, but a reattach doesn't need them.
+  defp track_subagent_launch(pending_calls, payload) do
+    tool_call_id = payload["tool_call_id"]
+    child_run_id = parse_run_id(payload["child_run_id"])
+
+    cond do
+      is_nil(child_run_id) ->
+        pending_calls
+
+      Enum.any?(pending_calls, &(&1["id"] == tool_call_id)) ->
+        Enum.map(pending_calls, fn
+          %{"id" => ^tool_call_id} = tc -> Map.put(tc, "child_run_id", child_run_id)
+          tc -> tc
+        end)
+
+      true ->
+        pending_calls ++
+          [
+            %{
+              "id" => tool_call_id,
+              "name" => "launch_agent",
+              "arguments" => %{"agent_name" => payload["child_agent_name"]},
+              "child_run_id" => child_run_id
+            }
+          ]
+    end
+  end
+
+  # Event payloads stringify the id; a value that doesn't parse means we have no
+  # child to reattach to, and the caller falls back to a fresh launch.
+  defp parse_run_id(id) when is_integer(id), do: id
+
+  defp parse_run_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {run_id, ""} -> run_id
+      _ -> nil
+    end
+  end
+
+  defp parse_run_id(_), do: nil
+
+  # Keyed by child *run* id, not child agent id: one parent step can launch the
+  # same agent twice, and after a crash an abandoned child can still be alive
+  # and broadcasting on the same topic.
+  #
+  # Resolving twice is expected rather than exceptional — a reattached child
+  # may be read as terminal from the database and then also broadcast its
+  # completion. The first resolution removes the pending entry, so the second
+  # finds nothing and is dropped.
+  defp resolve_subagent(state, child_run_id, build_result) do
+    case Map.pop(state.pending_subagents, child_run_id) do
+      {nil, _pending} ->
+        state
+
+      {%{task_id: task_id}, remaining} ->
+        send(self(), {:task_result, task_id, build_result.()})
+        %{state | pending_subagents: remaining}
+    end
   end
 
   # The launch_agent tool result carries the child's run id, not just its text.
