@@ -359,7 +359,7 @@ These are explicitly cut. Some are good ideas for later. None are needed for the
 
 1. **In-process worker registration.** The current `WorkerRegistry` expects `channel_pid` to be a Phoenix Channel process (it pushes messages via `send/2`). The in-process worker approach should work since it's just `send(pid, {:push_tool_task, task})`, but need to verify there's no Channel-specific assumption in the message handling path.
 
-2. **`ask_human` implementation.** The Norns runtime has `:waiting` as a defined state but the current Process module doesn't have a built-in mechanism for pausing and resuming on human input. Need to determine: does `ask_human` use the existing `wait`-like mechanism, or does it need a new event type (`waiting_for_user` exists in the event contract but isn't wired into Process yet)?
+2. ~~**`ask_human` implementation.**~~ **Resolved (2026-08):** `ask_human` is a built-in. It parks the run durably in `:waiting` via the `waiting_for_user` event; `POST /runs/:id/reply` (or `reply_to_human`) resumes it. This spec's former runtime blocker is gone.
 
 3. **Slack Socket Mode vs. Events API.** Socket Mode is simpler (no public URL needed, works behind NAT) but requires the app-level token. Events API needs a public endpoint. Leaning Socket Mode for personal deployment simplicity.
 

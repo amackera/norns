@@ -1,5 +1,8 @@
 # Custom Agent Workflows
 
+**Status: Parked (2026-08-08).** Downstream of `plan-durable-mcp.md`, which is
+parked by the fork decision — see `decision-log.md` and `roadmap.md`.
+
 ## Problem
 
 Norns runs a prescriptive LLM-tool loop: call LLM → dispatch tools → collect results → repeat. The developer has zero control over what happens between steps. This covers simple "chatbot with tools" agents but blocks real production use cases:

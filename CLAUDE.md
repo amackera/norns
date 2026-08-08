@@ -71,7 +71,7 @@ When debugging a failing run, start with `nornsctl runs show <id>` to check the 
 ## Conventions
 
 - The orchestrator NEVER executes anything — all work goes through connected workers
-- No built-in tools — tools are defined and registered by workers
+- Four built-in tools (`wait`, `ask_human`, `launch_agent`, `list_agents`) are intercepted by the orchestrator; all other tools are defined and registered by workers
 - Follow standard Phoenix project conventions
 - Keep contexts in `lib/norns/`, web layer in `lib/norns_web/`
 - Every table has `tenant_id` — multi-tenancy enforced at the data model level
@@ -84,5 +84,9 @@ When debugging a failing run, start with `nornsctl runs show <id>` to check the 
 - **Workers** connect via `/worker` WebSocket, register capabilities `[:llm, :tools]`, receive task pushes
 - **Conversations:** persistent chat history, keyed by external ID (auto-generated if not provided)
 - **Events:** versioned (`schema_version: 1`), validated, provider-neutral format
-- **Crash recovery:** replay from last checkpoint, re-dispatch pending tools
+- **Crash recovery:** replay from last checkpoint, re-dispatch pending tools; a pending `launch_agent` reattaches to its in-flight child run instead of relaunching
 - **Idempotency:** deterministic keys for side-effecting tools, skip on replay
+
+## Design docs
+
+`docs/` holds the plans and decisions. Start with `docs/roadmap.md` (sequencing) and `docs/decision-log.md` (what's built and why). `docs/plan-agent-builder.md` is the current product direction; `docs/gards.md` is the worker-affinity design.

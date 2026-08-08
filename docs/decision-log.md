@@ -1,14 +1,29 @@
 # Decision Log
 
-Last updated: 2026-04-01
+Last updated: 2026-08-08
 
 ## Product Decisions
 
 ### Pure orchestrator — no execution
 - Norns is a state machine and event log. It never makes LLM calls or executes tools.
 - All execution happens on workers. You need a connected worker to do anything.
-- Built-in tools (wait, launch_agent, list_agents) are intercepted by the orchestrator, never sent to workers. All other tools are worker-provided.
+- Built-in tools (wait, ask_human, launch_agent, list_agents) are intercepted by the orchestrator, never sent to workers. All other tools are worker-provided.
 - The orchestrator's job: dispatch tasks, persist events, manage state, crash recovery.
+- Purity means the orchestrator never touches the outside world — no credentials, no user data, no third-party APIs. Reading/writing the runtime's own state (runs, defs, events) does not break it; holding a Slack token would.
+
+### Tools are infrastructure, agents are configuration
+- Workers are the tenant's long-lived capability layer (the Slack worker, the DB worker), maintained like services.
+- Agents are cheap, disposable data: prompt + model + tool selection + triggers, created and tested entirely through the API.
+- The agent builder composes existing tools by default and only falls back to generating worker code (from templates) when a capability is missing. See `plan-agent-builder.md`.
+
+### Triggers are Norns data
+- Cron schedules and inbound webhook mappings live in Norns tables, managed via API — not in worker repos. Composed agents have no repo.
+- Connector workers (Slack, Discord — anything needing credentials or a persistent connection) stay outside core. The line: if it speaks HTTP to us, core can receive it; if we must hold credentials or a connection, it's a connector.
+
+### The fork: own the provisioner (decided 2026-08-08)
+- We sell compute (managed gards), not just durability semantics. Fabricated workers need somewhere durable to run; that somewhere is ours to operate.
+- The orchestrator stays pure — the provisioner is a separate product, per `gards.md`.
+- Durable MCP → custom workflows is parked, not dead.
 
 ### Workers own everything
 - Workers hold API keys, database credentials, tool implementations.
@@ -75,9 +90,23 @@ Last updated: 2026-04-01
 
 ### Multi-agent orchestration
 - Built-in `launch_agent` and `list_agents` tools.
-- Child agents launched via PubSub, tracked in `pending_subagents`.
+- Child agents launched via PubSub, tracked in `pending_subagents` (keyed by child run id).
 - `subagent_launched` event type with replay support.
 - Agents can discover and delegate to other agents within the same tenant.
+- Run lineage: `parent_run_id` + `depth`, `max_depth` recursion bound (not a cost control).
+
+### Human in the loop
+- Built-in `ask_human` parks the run durably in `:waiting`; `POST /runs/:id/reply` (or `reply_to_human`) resumes it.
+- `waiting_for_user` event + broadcast lets any surface (dashboard, connector, client SDK `wait=True`) relay the question and the answer.
+
+### Subagent allowlists
+- `Norns.Agents.SubagentPolicy` — per-agent authorization for `launch_agent` / `list_agents`, with audit events. Defaults open; existing agents unaffected.
+- Phase 1 of `plan-subagent-allowlists.md`; phases 2–3 remain proposed.
+
+### Sub-agent crash recovery
+- A resumed parent reattaches to its in-flight child by run id instead of relaunching it — a pending `launch_agent` is a reference to work already underway, not a request.
+- Subscribe-before-read closes the completion race; `run_id` rides on every agent broadcast; a parent resumed alone restarts its own orphaned child.
+- See `architecture.md` § "Recovering a parent that was awaiting a sub-agent".
 
 ---
 
@@ -90,7 +119,7 @@ Last updated: 2026-04-01
 ### Policy enforcement
 - Pre-dispatch hook point in the orchestrator (not built, architecture supports it).
 - Rule-based (orchestrator evaluates) and LLM-evaluated (worker evaluates) flavors.
+- `SubagentPolicy` and the planned per-agent tool selection are both bespoke policy checks; a third one is the signal to build the generic hook.
 
-### Subagent allowlists
-- Authorization guardrails for which agents can launch which sub-agents.
-- See `plan-subagent-allowlists.md`.
+### Per-agent tool selection
+- Every agent currently sees every tool in the tenant (`process.ex` builds the LLM tool list unfiltered). Decided: add a tool allowlist to `AgentDef`, same shape as `SubagentPolicy`. Not built. First step in `roadmap.md`.
