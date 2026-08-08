@@ -52,6 +52,7 @@ defmodule NornsWeb.Router do
     get "/runs", RunController, :index
     get "/runs/:id", RunController, :show
     get "/runs/:id/events", RunController, :events
+    get "/runs/:id/summary", RunController, :summary
     post "/runs/:id/retry", RunController, :retry
     post "/runs/:id/reply", RunController, :reply
   end

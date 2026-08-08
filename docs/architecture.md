@@ -98,6 +98,12 @@ All state is captured as versioned, validated events (`schema_version: 1`). Even
 - **Sub-agents:** `subagent_launched`, `subagent_launch_allowed`, `subagent_launch_denied`, `subagent_list_allowed`, `subagent_list_denied`
 - **Retry:** `retry`
 
+`llm_request` records `tools`: the names of every tool offered to the model on
+that step. It's what makes it possible to tell after the fact that a model
+called something it was never given, or was given tools and ignored them.
+Names only — full schemas would bloat every row for no analytical gain. The
+field is optional, so events written before it existed still validate.
+
 ### Sub-agent authorization
 
 `launch_agent` and `list_agents` are authorized server-side, in the built-in
@@ -132,6 +138,36 @@ losing the call.
 
 Defaults are permissive, so agents without a `subagents` block behave exactly as
 before.
+
+### Trace summaries
+
+`GET /api/v1/runs/:id/summary` returns a fixed-size account of what a run did:
+verdict, counters, per-tool usage, a collapsed timeline, and detected signals.
+
+It exists because the event log doesn't scale as a *reading* surface. A
+200-step run holds several megabytes of events — `llm_request` carries the
+entire message array on every step — so anything trying to reason about a run
+either drowns or has to page through it. The summary stays a few kilobytes
+regardless: consecutive steps calling the same tool with the same result class
+collapse into one entry carrying a count and a sequence range, and the middle
+of a long timeline elides to a single marker. Nothing is discarded; every
+elision carries the range needed to fetch the detail from `/events`.
+
+Measured on synthetic runs: 200 steps produced 6.4 MB of event payloads and a
+5.4 KB summary, barely larger than the 50-step case.
+
+Signals are observations, not advice — `loop`, `max_steps`, `tool_failing`,
+`unknown_tool`, `no_tool_use`, `parked_unanswered`, `retry_storm`,
+`unreturned_call`. Each carries a severity and the sequence range that
+evidences it. They deliberately don't suggest fixes.
+
+`unknown_tool` and `no_tool_use` depend on `llm_request` recording the names of
+the tools offered to the model. Runs predating that field report neither rather
+than guessing.
+
+Message content, system prompts, and full tool results are never included.
+Results are truncated; arguments are inspected so a string is distinguishable
+from a number.
 
 ### Run lineage and nesting depth
 
@@ -205,6 +241,7 @@ GET    /api/v1/agents/:id/runs               — list runs
 GET    /api/v1/agents/:id/conversations      — list conversations
 GET    /api/v1/runs/:id                      — run details + failure inspector
 GET    /api/v1/runs/:id/events               — event log
+GET    /api/v1/runs/:id/summary              — fixed-size trace summary
 ```
 
 Auth via `Authorization: Bearer <token>`. Real-time events via WebSocket at `/socket`.

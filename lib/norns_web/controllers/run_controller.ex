@@ -81,6 +81,23 @@ defmodule NornsWeb.RunController do
     end
   end
 
+  @doc """
+  A fixed-size account of what the run did.
+
+  Use this rather than `events` when something needs to reason about a run:
+  the event log carries full message arrays and runs to megabytes, while this
+  stays a few kilobytes however long the run was. Elided detail comes with the
+  sequence range to fetch it from `events`.
+  """
+  def summary(conn, %{"id" => id}) do
+    tenant = conn.assigns.current_tenant
+
+    with {:ok, run} <- fetch_run(id, tenant.id),
+         {:ok, summary} <- Runs.trace_summary(run.id) do
+      json(conn, %{data: summary})
+    end
+  end
+
   defp fetch_run(id, tenant_id) do
     run = Runs.get_run!(id)
 

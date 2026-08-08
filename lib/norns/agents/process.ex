@@ -246,7 +246,12 @@ defmodule Norns.Agents.Process do
         "message_count" => length(messages_for_llm),
         "messages" => messages_for_llm,
         "system_prompt" => system_prompt,
-        "model" => state.agent_def.model
+        "model" => state.agent_def.model,
+        # Names only. Enough to tell later whether the model called something it
+        # was never offered, or was offered tools and ignored them — neither of
+        # which is recoverable from the log without this. Full schemas would
+        # bloat every row for no analytical gain.
+        "tools" => Enum.map(all_tools, & &1.name)
       }))
 
       # Dispatch LLM call to worker — non-blocking, neutral format

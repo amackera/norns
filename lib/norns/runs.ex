@@ -61,6 +61,11 @@ defmodule Norns.Runs do
     end
   end
 
+  @doc """
+  A fixed-size summary of what a run did. See `Norns.Runs.TraceSummary`.
+  """
+  defdelegate trace_summary(run_id), to: Norns.Runs.TraceSummary, as: :build
+
   def list_events(run_id) do
     RunEvent
     |> where([e], e.run_id == ^run_id)
