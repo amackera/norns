@@ -22,6 +22,8 @@ defmodule NornsWeb.JSON do
       id: run.id,
       agent_id: run.agent_id,
       conversation_id: run.conversation_id,
+      parent_run_id: run.parent_run_id,
+      depth: run.depth,
       status: run.status,
       trigger_type: run.trigger_type,
       input: run.input,

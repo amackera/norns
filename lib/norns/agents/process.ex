@@ -26,9 +26,22 @@ defmodule Norns.Agents.Process do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @doc """
+  Start a run on this agent.
+
+  Options:
+
+    * `:context` — extra context map merged into the run input
+    * `:parent_run_id` / `:depth` — lineage, set when this run is a sub-agent
+      launched by another run. Absent for user-initiated runs.
+  """
   def send_message(pid, content, opts \\ []) when is_binary(content) do
-    context = Keyword.get(opts, :context)
-    GenServer.call(pid, {:send_message, content, context}, 10_000)
+    lineage =
+      opts
+      |> Keyword.take([:context, :parent_run_id, :depth])
+      |> Keyword.put_new(:depth, 0)
+
+    GenServer.call(pid, {:send_message, content, lineage}, 10_000)
   end
 
   def get_state(pid) do
@@ -103,7 +116,8 @@ defmodule Norns.Agents.Process do
   end
 
   @impl true
-  def handle_call({:send_message, content, context}, _from, %{status: :idle} = state) do
+  def handle_call({:send_message, content, opts}, _from, %{status: :idle} = state) do
+    context = Keyword.get(opts, :context)
     state = load_conversation_state(state)
     messages = messages_for_new_run(state, content, context)
 
@@ -117,7 +131,9 @@ defmodule Norns.Agents.Process do
         conversation_id: state.conversation && state.conversation.id,
         trigger_type: "message",
         input: input,
-        status: "pending"
+        status: "pending",
+        parent_run_id: Keyword.get(opts, :parent_run_id),
+        depth: Keyword.get(opts, :depth, 0)
       })
 
     append(run, Events.run_started())
@@ -132,12 +148,12 @@ defmodule Norns.Agents.Process do
   # A message arriving while parked on ask_human is the answer. Conversational
   # clients (a Slack bot, a chat UI) shouldn't have to track agent state and
   # switch endpoints mid-conversation — the human just replies.
-  def handle_call({:send_message, content, _context}, _from, %{status: :waiting, pending_human: pending} = state)
+  def handle_call({:send_message, content, _opts}, _from, %{status: :waiting, pending_human: pending} = state)
       when not is_nil(pending) do
     deliver_human_answer(state, content, {:ok, state.run.id})
   end
 
-  def handle_call({:send_message, _content, _context}, _from, state) do
+  def handle_call({:send_message, _content, _opts}, _from, state) do
     Logger.warning("Agent #{state.agent_id} received message while #{state.status}, ignoring")
     {:reply, {:error, :busy}, state}
   end
@@ -458,6 +474,10 @@ defmodule Norns.Agents.Process do
       policy = st.agent_def.subagents
       authorization = SubagentPolicy.authorize_launch(policy, agent_name)
 
+      # Absolute depth from the root run, not distance from this agent.
+      child_depth = (st.run && st.run.depth && st.run.depth + 1) || 1
+      depth_authorization = SubagentPolicy.authorize_depth(policy, child_depth)
+
       cond do
         match?({:error, _}, authorization) ->
           {:error, reason} = authorization
@@ -468,6 +488,16 @@ defmodule Norns.Agents.Process do
               "disabled" -> "This agent is not permitted to launch sub-agents."
               _ -> "Agent '#{agent_name}' is not in this agent's allowed sub-agents."
             end
+
+          result = make_error_tool_result(st, block, "launch_agent", error_msg)
+          {results ++ [result], pending, st}
+
+        match?({:error, _}, depth_authorization) ->
+          append_subagent_decision(st, "subagent_launch_denied", policy, agent_name, "max_depth")
+
+          error_msg =
+            "Sub-agent nesting limit reached (max depth #{policy.max_depth}). " <>
+              "Do the work in this agent instead of delegating further."
 
           result = make_error_tool_result(st, block, "launch_agent", error_msg)
           {results ++ [result], pending, st}
@@ -490,7 +520,12 @@ defmodule Norns.Agents.Process do
 
           conversation_key = "subagent_#{block["id"]}_#{System.unique_integer([:positive])}"
 
-          spawn_opts = [conversation_key: conversation_key]
+          spawn_opts = [
+            conversation_key: conversation_key,
+            parent_run_id: st.run && st.run.id,
+            depth: child_depth
+          ]
+
           spawn_opts = if context, do: Keyword.put(spawn_opts, :context, context), else: spawn_opts
 
           case Norns.Agents.Registry.send_message(st.tenant_id, child_agent.id, message, spawn_opts) do
@@ -775,8 +810,8 @@ defmodule Norns.Agents.Process do
   # Child agent completed — convert to task_result for existing pipeline
   def handle_info({:completed, %{agent_id: child_id, output: output}}, %{status: :awaiting_tools} = state) do
     case find_subagent_task(state, child_id) do
-      {task_id, _} ->
-        send(self(), {:task_result, task_id, {:ok, output || ""}})
+      %{task_id: task_id, run_id: run_id} ->
+        send(self(), {:task_result, task_id, {:ok, subagent_result(run_id, "completed", %{"output" => output || ""})}})
         {:noreply, %{state | pending_subagents: Map.delete(state.pending_subagents, child_id)}}
 
       nil ->
@@ -787,8 +822,9 @@ defmodule Norns.Agents.Process do
   # Child agent failed — convert to task_result error
   def handle_info({:error, %{agent_id: child_id, error: error}}, %{status: :awaiting_tools} = state) do
     case find_subagent_task(state, child_id) do
-      {task_id, _} ->
-        send(self(), {:task_result, task_id, {:error, "Sub-agent failed: #{error}"}})
+      %{task_id: task_id, run_id: run_id} ->
+        payload = subagent_result(run_id, "failed", %{"error" => to_string(error)})
+        send(self(), {:task_result, task_id, {:error, payload}})
         {:noreply, %{state | pending_subagents: Map.delete(state.pending_subagents, child_id)}}
 
       nil ->
@@ -1269,10 +1305,16 @@ defmodule Norns.Agents.Process do
   end
 
   defp find_subagent_task(state, child_agent_id) do
-    case Map.get(state.pending_subagents, child_agent_id) do
-      %{task_id: task_id, tool_call_id: tool_call_id} -> {task_id, tool_call_id}
-      nil -> nil
-    end
+    Map.get(state.pending_subagents, child_agent_id)
+  end
+
+  # The launch_agent tool result carries the child's run id, not just its text.
+  # Without it a parent can see *what* a sub-agent said but has no handle to
+  # inspect *how* it got there — which is the whole point of the event log.
+  defp subagent_result(run_id, status, extra) do
+    %{"run_id" => run_id, "status" => status}
+    |> Map.merge(extra)
+    |> Jason.encode!()
   end
 
   defp append(run, {:ok, event}), do: Runs.append_event(run, event)

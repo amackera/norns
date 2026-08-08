@@ -108,7 +108,8 @@ tool path — not by prompting. Policy lives in the agent's `model_config`:
   "subagents": {
     "mode": "allowlist",
     "allowed_agents": ["hello-bot"],
-    "allow_list_agents": false
+    "allow_list_agents": false,
+    "max_depth": 3
   }
 }
 ```
@@ -125,11 +126,38 @@ tenant-scoped, so a cross-tenant target is never launchable regardless of mode.
 Every decision — allowed or denied — is recorded as an event carrying
 `requesting_agent_id`, `requesting_agent_name`, `mode`, the `target_agent_name`
 where applicable, and a `reason` code on denials (`disabled`,
-`not_allowlisted`, `list_agents_disabled`). Denials also return an error tool
-result, so the model learns it was refused rather than silently losing the call.
+`not_allowlisted`, `list_agents_disabled`, `max_depth`). Denials also return an
+error tool result, so the model learns it was refused rather than silently
+losing the call.
 
 Defaults are permissive, so agents without a `subagents` block behave exactly as
 before.
+
+### Run lineage and nesting depth
+
+Every run records `parent_run_id` and `depth`. A user-initiated run is a root:
+`parent_run_id` is `nil` and `depth` is `0`. A run launched via `launch_agent`
+points at its parent and sits one level deeper.
+
+`max_depth` (default `3`) bounds nesting, counted absolutely from the root.
+It exists to stop runaway recursion — agent A launching B launching A. It is
+deliberately *not* a cost control: one agent launching fifty children at depth 1
+costs far more than a chain of five, and depth says nothing about that. Bound
+fan-out separately if you need a spend ceiling.
+
+The check runs before the child is spawned, so a denied launch creates no run.
+Previously nesting was unbounded, so the default only affects agents that were
+already recursing more than three levels deep.
+
+The `launch_agent` tool result is a JSON object rather than the child's bare
+output:
+
+```json
+{"run_id": 482, "status": "completed", "output": "..."}
+```
+
+The `run_id` lets a parent inspect *how* a sub-agent reached its answer through
+the run's event log, not just what it said.
 
 ### Error Classification
 
