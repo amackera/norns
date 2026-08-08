@@ -49,6 +49,8 @@ defmodule NornsWeb.Router do
       delete "/conversations/:key", ConversationController, :delete
     end
 
+    get "/tools", ToolController, :index
+
     get "/runs", RunController, :index
     get "/runs/:id", RunController, :show
     get "/runs/:id/events", RunController, :events

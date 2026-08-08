@@ -42,6 +42,16 @@ defmodule Norns.Workers.WorkerRegistry do
     GenServer.call(__MODULE__, {:llm_available?, tenant_id})
   end
 
+  @doc """
+  Workers currently connected for a tenant, as `%{worker_id:, capabilities:, tool_count:}`.
+
+  Lets a caller tell "no tools because nothing is connected" apart from "no
+  tools because none were registered" — different problems with different fixes.
+  """
+  def connected_workers(tenant_id) do
+    GenServer.call(__MODULE__, {:connected_workers, tenant_id})
+  end
+
   @doc "Dispatch an LLM task to a worker with LLM capability."
   def dispatch_llm_task(tenant_id, task, opts \\ []) do
     from_pid = Keyword.get(opts, :from_pid, self())
@@ -150,6 +160,17 @@ defmodule Norns.Workers.WorkerRegistry do
       end)
 
     {:reply, tools, state}
+  end
+
+  def handle_call({:connected_workers, tenant_id}, _from, state) do
+    workers =
+      state.workers
+      |> Enum.filter(fn {{tid, _}, w} -> tid == tenant_id and Process.alive?(w.channel_pid) end)
+      |> Enum.map(fn {{_tid, worker_id}, w} ->
+        %{worker_id: worker_id, capabilities: w.capabilities, tool_count: length(w.tools)}
+      end)
+
+    {:reply, workers, state}
   end
 
   def handle_call({:llm_available?, tenant_id}, _from, state) do
