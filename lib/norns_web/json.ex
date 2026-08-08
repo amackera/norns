@@ -38,6 +38,18 @@ defmodule NornsWeb.JSON do
     }
   end
 
+  def tool(tool) do
+    %{
+      name: tool.name,
+      description: tool.description,
+      # Included here, unlike in the event log: an agent author needs the
+      # shape of a call, and this is fetched once rather than per step.
+      input_schema: tool.input_schema,
+      source: Norns.Tools.Catalog.source(tool),
+      side_effect: tool.side_effect?
+    }
+  end
+
   def run_event(event) do
     %{
       id: event.id,

@@ -139,6 +139,39 @@ losing the call.
 Defaults are permissive, so agents without a `subagents` block behave exactly as
 before.
 
+### Tool catalog
+
+`GET /api/v1/tools` returns the tools an agent in this tenant can currently
+call. It answers the question you have to settle before writing an agent
+definition: will the tools I name actually be there?
+
+The list comes from `Norns.Tools.Catalog`, which is also what the `/tools`
+dashboard reads. The composition — built-ins, then locally registered tools,
+then tools advertised by connected workers, deduplicated by name — used to be
+repeated at each call site, which let a page describe a surface that didn't
+match what agents were given. A worker cannot shadow a built-in, because
+dispatch resolves built-ins first.
+
+Each entry carries `source` (`builtin`, `local`, `worker`), `input_schema`, and
+`side_effect`. Worker tools exist only while their worker is connected, so
+`meta` reports what's there to serve them:
+
+```json
+{
+  "meta": {
+    "workers_connected": 1,
+    "workers": [{"worker_id": "docs-worker", "capabilities": ["tools"], "tool_count": 2}],
+    "llm_available": true
+  }
+}
+```
+
+Without that, an empty tool list is ambiguous — nothing registered, or nothing
+connected, are different problems. Note that `llm_available` has wider scope
+than `workers_connected`: LLM dispatch falls back to `:default`-tenant workers
+that serve every tenant, while tool dispatch does not. The two disagreeing is
+expected.
+
 ### Trace summaries
 
 `GET /api/v1/runs/:id/summary` returns a fixed-size account of what a run did:
@@ -242,6 +275,7 @@ GET    /api/v1/agents/:id/conversations      — list conversations
 GET    /api/v1/runs/:id                      — run details + failure inspector
 GET    /api/v1/runs/:id/events               — event log
 GET    /api/v1/runs/:id/summary              — fixed-size trace summary
+GET    /api/v1/tools                         — tools callable in this tenant
 ```
 
 Auth via `Authorization: Bearer <token>`. Real-time events via WebSocket at `/socket`.

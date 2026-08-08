@@ -1,16 +1,18 @@
 defmodule NornsWeb.ToolsLive do
   use NornsWeb, :live_view
 
-  alias Norns.Tools.Builtins
-  alias Norns.Tools.Registry, as: ToolRegistry
-  alias Norns.Workers.WorkerRegistry
+  alias Norns.Tools.Catalog
 
   @impl true
   def mount(_params, session, socket) do
     case load_tenant(session) do
       {:ok, tenant} ->
-        built_in = Builtins.all() ++ ToolRegistry.all_tools()
-        worker_tools = WorkerRegistry.available_tools(tenant.id)
+        # Via the catalog so the page shows the deduplicated list agents are
+        # actually offered, not a union that includes shadowed entries.
+        {worker_tools, built_in} =
+          tenant.id
+          |> Catalog.for_tenant()
+          |> Enum.split_with(&(Catalog.source(&1) == "worker"))
 
         {:ok, assign(socket, tenant: tenant, current_tenant: tenant, built_in: built_in, worker_tools: worker_tools)}
 
