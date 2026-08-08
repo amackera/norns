@@ -266,6 +266,68 @@ defmodule NornsWeb.RunControllerTest do
     end
   end
 
+  describe "GET /api/v1/runs/:id/summary" do
+    test "returns a trace summary", %{conn: conn, tenant: tenant, agent: agent} do
+      {:ok, run} =
+        Norns.Runs.create_run(%{
+          agent_id: agent.id,
+          tenant_id: tenant.id,
+          trigger_type: "message",
+          input: %{},
+          status: "completed"
+        })
+
+      Norns.Runs.append_event(run, %{
+        event_type: "tool_call",
+        source: "system",
+        payload: %{
+          "tool_call_id" => "c1",
+          "name" => "search_docs",
+          "arguments" => %{"query" => "refunds"},
+          "step" => 1
+        }
+      })
+
+      Norns.Runs.append_event(run, %{
+        event_type: "tool_result",
+        source: "system",
+        payload: %{
+          "tool_call_id" => "c1",
+          "name" => "search_docs",
+          "content" => "3 results",
+          "is_error" => false,
+          "step" => 1
+        }
+      })
+
+      conn = get(conn, "/api/v1/runs/#{run.id}/summary")
+      assert %{"data" => summary} = json_response(conn, 200)
+
+      assert summary["run_id"] == run.id
+      assert summary["reason"] == "completed"
+      assert summary["counters"]["tool_calls"] == 1
+      assert [%{"call" => call}] = summary["timeline"]
+      assert call =~ "search_docs"
+    end
+
+    test "returns 404 for another tenant's run", %{conn: conn} do
+      other = create_tenant(%{slug: "other-summary"})
+      other_agent = create_agent(other)
+
+      {:ok, run} =
+        Norns.Runs.create_run(%{
+          agent_id: other_agent.id,
+          tenant_id: other.id,
+          trigger_type: "message",
+          input: %{},
+          status: "completed"
+        })
+
+      conn = get(conn, "/api/v1/runs/#{run.id}/summary")
+      assert json_response(conn, 404)
+    end
+  end
+
   describe "authentication" do
     test "returns 401 without token" do
       conn = build_conn() |> get("/api/v1/runs/123")
