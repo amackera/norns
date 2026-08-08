@@ -9,7 +9,8 @@ defmodule Norns.Agents.SubagentPolicy do
         "subagents": {
           "mode": "allowlist",
           "allowed_agents": ["hello-bot"],
-          "allow_list_agents": false
+          "allow_list_agents": false,
+          "max_depth": 3
         }
       }
 
@@ -22,19 +23,33 @@ defmodule Norns.Agents.SubagentPolicy do
 
   `allow_list_agents` controls whether `list_agents` is permitted.
 
+  `max_depth` bounds how deeply runs may nest, counted from the root run (which
+  is depth 0). It stops runaway recursion — an agent that launches an agent that
+  launches it back. It is *not* a cost control: a single agent launching fifty
+  children at depth 1 is far more expensive than a chain of five, and depth
+  says nothing about that.
+
   Defaults are deliberately permissive so that adding the policy doesn't change
-  behaviour for agents that don't configure it.
+  behaviour for agents that don't configure it. The exception is `max_depth`,
+  which defaults to #{3} — previously nesting was unbounded, so an agent
+  recursing deeper than that was already misbehaving.
   """
 
-  defstruct mode: :open, allowed_agents: [], allow_list_agents: true
+  @default_max_depth 3
+
+  defstruct mode: :open, allowed_agents: [], allow_list_agents: true, max_depth: @default_max_depth
 
   @type mode :: :open | :allowlist | :disabled
 
   @type t :: %__MODULE__{
           mode: mode(),
           allowed_agents: [String.t()],
-          allow_list_agents: boolean()
+          allow_list_agents: boolean(),
+          max_depth: non_neg_integer()
         }
+
+  @doc "The nesting depth allowed when an agent doesn't configure one."
+  def default_max_depth, do: @default_max_depth
 
   @doc "Parse a policy out of an agent's `model_config`. Unknown values fall back to the permissive default."
   @spec from_config(map() | nil) :: t()
@@ -44,7 +59,8 @@ defmodule Norns.Agents.SubagentPolicy do
         %__MODULE__{
           mode: parse_mode(Map.get(settings, "mode")),
           allowed_agents: parse_allowed(Map.get(settings, "allowed_agents")),
-          allow_list_agents: parse_boolean(Map.get(settings, "allow_list_agents"), true)
+          allow_list_agents: parse_boolean(Map.get(settings, "allow_list_agents"), true),
+          max_depth: parse_max_depth(Map.get(settings, "max_depth"))
         }
 
       _ ->
@@ -78,6 +94,18 @@ defmodule Norns.Agents.SubagentPolicy do
   def authorize_list(%__MODULE__{allow_list_agents: true}), do: :ok
   def authorize_list(%__MODULE__{}), do: {:error, "list_agents_disabled"}
 
+  @doc """
+  Whether a child at `child_depth` may be launched.
+
+  `child_depth` is absolute — the depth the child run would have, not the
+  distance from the launching agent. Returns `:ok` or `{:error, "max_depth"}`.
+  """
+  @spec authorize_depth(t(), non_neg_integer()) :: :ok | {:error, String.t()}
+  def authorize_depth(%__MODULE__{max_depth: max}, child_depth) when child_depth > max,
+    do: {:error, "max_depth"}
+
+  def authorize_depth(%__MODULE__{}, _child_depth), do: :ok
+
   defp parse_mode("allowlist"), do: :allowlist
   defp parse_mode("disabled"), do: :disabled
   defp parse_mode(_), do: :open
@@ -87,4 +115,7 @@ defmodule Norns.Agents.SubagentPolicy do
 
   defp parse_boolean(value, _default) when is_boolean(value), do: value
   defp parse_boolean(_value, default), do: default
+
+  defp parse_max_depth(value) when is_integer(value) and value >= 0, do: value
+  defp parse_max_depth(_), do: @default_max_depth
 end

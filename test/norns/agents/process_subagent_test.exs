@@ -119,6 +119,87 @@ defmodule Norns.Agents.ProcessSubagentTest do
       assert launched.payload["tool_call_id"] == "call_launch"
     end
 
+    test "tool result carries the child's run id so the parent can inspect it",
+         %{tenant: tenant, agent: agent} do
+      _child_agent = create_agent(tenant, %{name: "traceable-child"})
+
+      Fake.set_responses([
+        %{
+          content: [
+            %{
+              "type" => "tool_use",
+              "id" => "call_launch",
+              "name" => "launch_agent",
+              "input" => %{"agent_name" => "traceable-child", "message" => "work"}
+            }
+          ],
+          stop_reason: "tool_use"
+        },
+        %{content: [%{"type" => "text", "text" => "child output here"}], stop_reason: "end_turn"},
+        %{content: [%{"type" => "text", "text" => "parent done"}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "Launch child")
+      wait_for(:completed)
+
+      events = Runs.list_events(AgentProcess.get_state(pid).run_id)
+
+      result =
+        events
+        |> Enum.find(&(&1.event_type == "tool_result" && &1.payload["name"] == "launch_agent"))
+        |> Map.fetch!(:payload)
+        |> Map.fetch!("content")
+        |> Jason.decode!()
+
+      assert result["status"] == "completed"
+      assert result["output"] == "child output here"
+
+      # The run id must actually resolve, and point at the child, not the parent.
+      child_run = Runs.get_run!(result["run_id"])
+      assert child_run.depth == 1
+      assert child_run.parent_run_id == AgentProcess.get_state(pid).run_id
+    end
+
+    test "a child run records its parent and depth", %{tenant: tenant, agent: agent} do
+      _child_agent = create_agent(tenant, %{name: "lineage-child"})
+
+      Fake.set_responses([
+        %{
+          content: [
+            %{
+              "type" => "tool_use",
+              "id" => "call_launch",
+              "name" => "launch_agent",
+              "input" => %{"agent_name" => "lineage-child", "message" => "work"}
+            }
+          ],
+          stop_reason: "tool_use"
+        },
+        %{content: [%{"type" => "text", "text" => "done"}], stop_reason: "end_turn"},
+        %{content: [%{"type" => "text", "text" => "done"}], stop_reason: "end_turn"}
+      ])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      parent_run_id = AgentProcess.get_state(pid).run_id
+      parent_run = Runs.get_run!(parent_run_id)
+
+      # A user-initiated run is a root.
+      assert parent_run.depth == 0
+      assert parent_run.parent_run_id == nil
+
+      launched =
+        Runs.list_events(parent_run_id)
+        |> Enum.find(&(&1.event_type == "subagent_launched"))
+
+      child_run = Runs.get_run!(String.to_integer(launched.payload["child_run_id"]))
+      assert child_run.depth == 1
+      assert child_run.parent_run_id == parent_run_id
+    end
+
     test "rejects self-launch", %{tenant: tenant, agent: agent} do
       Fake.set_responses([
         %{
@@ -347,6 +428,57 @@ defmodule Norns.Agents.ProcessSubagentTest do
     test "open mode can launch a same-tenant agent", %{tenant: tenant} do
       target = create_agent(tenant, %{name: "target-open"})
       agent = policy_agent(tenant, %{"mode" => "open"})
+
+      Fake.set_responses([launch_response(target.name), done_response(), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      assert Enum.any?(events, &(&1.event_type == "subagent_launch_allowed"))
+      refute Enum.any?(events, &(&1.event_type == "subagent_launch_denied"))
+    end
+
+    test "max_depth=0 denies any launch from a root run", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-too-deep"})
+      agent = policy_agent(tenant, %{"mode" => "open", "max_depth" => 0})
+
+      Fake.set_responses([launch_response(target.name), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      events = run_events(pid)
+      denied = Enum.find(events, &(&1.event_type == "subagent_launch_denied"))
+
+      assert denied.payload["reason"] == "max_depth"
+      assert denied.payload["target_agent_name"] == target.name
+      assert launch_tool_result(events).payload["is_error"] == true
+
+      # Denied means denied — no child run should exist.
+      refute Enum.any?(events, &(&1.event_type == "subagent_launched"))
+    end
+
+    test "the depth limit is checked before the child is spawned", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-never-spawned"})
+      agent = policy_agent(tenant, %{"mode" => "open", "max_depth" => 0})
+
+      before = Runs.list_runs(target.id) |> length()
+
+      Fake.set_responses([launch_response(target.name), done_response()])
+
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      subscribe_and_send(pid, agent.id, "go")
+      wait_for(:completed)
+
+      assert Runs.list_runs(target.id) |> length() == before
+    end
+
+    test "a launch within the depth limit is allowed", %{tenant: tenant} do
+      target = create_agent(tenant, %{name: "target-in-depth"})
+      agent = policy_agent(tenant, %{"mode" => "open", "max_depth" => 1})
 
       Fake.set_responses([launch_response(target.name), done_response(), done_response()])
 
