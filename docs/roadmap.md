@@ -105,7 +105,9 @@ managed gards as the home for builder output.
 - **Slack connector template/example.** The most demo-able thing Norns could
   have: conversations keyed by thread, `ask_human` relayed into the channel,
   durability visible in a channel people actually use. Falls out of step 4.
-- **Blog post** — sub-agent recovery write-up (seed drafted).
+- **Blog post** — sub-agent recovery write-up: published as
+  ["Is This Still Happening?"](https://mackeracher.com/posts/is-this-still-happening/)
+  (2026-08-08).
 - **Cross-SDK parity gaps** — Python serial task handling (a real concurrency
   bug under load), per-request LLM keys, model-string separator, graceful
   shutdown. Small and independently shippable.
