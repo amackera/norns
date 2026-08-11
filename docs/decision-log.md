@@ -114,6 +114,12 @@ Last updated: 2026-08-10
 - Enforced twice: the allowlist filters the tool list advertised to the LLM, and dispatch rejects a call outside it (error result back to the model, `tool_call_denied` audit event). Built-ins are exempt — `launch_agent`/`list_agents` are governed by `SubagentPolicy`.
 - The compose-mode prerequisite from `plan-agent-builder.md`: agents can now be assembled from a subset of the tenant's capability layer.
 
+### Cron triggers
+- `Norns.Triggers` — `triggers` table (agent, cron, message, optional persistent `conversation_key`), full CRUD at `/api/v1/triggers`, plus `POST /triggers/:id/fire` to test outside the schedule (doesn't consume the scheduled minute).
+- Fired by a minutely Oban job (`TriggerScheduler` via the Cron plugin). Dedupe is an atomic `last_fired_at` claim: at most one firing per trigger per matching minute, however many schedulers observe it.
+- Runs started by a trigger carry `trigger_type: "schedule"`. Cron expressions validated with `Oban.Cron.Expression` at write time.
+- Default is task mode (fresh conversation per firing); setting `conversation_key` opts into shared history across firings.
+
 ### Sub-agent crash recovery
 - A resumed parent reattaches to its in-flight child by run id instead of relaunching it — a pending `launch_agent` is a reference to work already underway, not a request.
 - Subscribe-before-read closes the completion race; `run_id` rides on every agent broadcast; a parent resumed alone restarts its own orphaned child.

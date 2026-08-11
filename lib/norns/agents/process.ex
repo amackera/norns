@@ -34,11 +34,13 @@ defmodule Norns.Agents.Process do
     * `:context` — extra context map merged into the run input
     * `:parent_run_id` / `:depth` — lineage, set when this run is a sub-agent
       launched by another run. Absent for user-initiated runs.
+    * `:trigger_type` — what started the run: `"message"` (default) or
+      `"schedule"` (cron trigger).
   """
   def send_message(pid, content, opts \\ []) when is_binary(content) do
     lineage =
       opts
-      |> Keyword.take([:context, :parent_run_id, :depth])
+      |> Keyword.take([:context, :parent_run_id, :depth, :trigger_type])
       |> Keyword.put_new(:depth, 0)
 
     GenServer.call(pid, {:send_message, content, lineage}, 10_000)
@@ -129,7 +131,7 @@ defmodule Norns.Agents.Process do
         agent_id: state.agent_id,
         tenant_id: state.tenant_id,
         conversation_id: state.conversation && state.conversation.id,
-        trigger_type: "message",
+        trigger_type: Keyword.get(opts, :trigger_type, "message"),
         input: input,
         status: "pending",
         parent_run_id: Keyword.get(opts, :parent_run_id),
