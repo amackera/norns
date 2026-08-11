@@ -105,7 +105,7 @@ print(result.output)
 
 ## Where this is going
 
-The direction is an agent builder: describe an agent, get a running durable one. The model that makes that possible: **tools are infrastructure, agents are configuration.** Workers form a tenant's long-lived capability layer (the Slack worker, the DB worker); agents are cheap data — prompt, model, tool selection, triggers — composed on top through the API without deploying anything. The near-term roadmap builds the primitives that story needs: per-agent tool selection, cron triggers, worker affinity ([gards](docs/gards.md)), and project templates. See [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
+The direction is an agent builder: describe an agent, get a running durable one. The model that makes that possible: **tools are infrastructure, agents are configuration.** Workers form a tenant's long-lived capability layer (the Slack worker, the DB worker); agents are cheap data — prompt, model, tool selection, triggers — composed on top through the API without deploying anything. The near-term roadmap builds the primitives that story needs: per-agent tool selection, cron triggers, inbound webhooks, worker affinity ([gards](docs/gards.md)), and project templates. Everything in this repo stays open source; the builder itself and managed hosting for workers and connectors are planned as a hosted product on top of these primitives. See [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
 
 ## Status
 

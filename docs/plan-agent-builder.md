@@ -1,6 +1,6 @@
 # Plan: Agent Builder
 
-**Status:** Direction agreed (2026-08-08), sequencing in `roadmap.md`
+**Status:** Direction agreed (2026-08-08); cloud boundary decided (2026-08-10) — builder ships as a Norns Cloud product, sequencing in `roadmap.md`
 **Depends on:** per-agent tool selection (not built), cron triggers (not built), gards Phase 1 (`gards.md`)
 
 The product direction: a builder that turns "create a Slack bot that posts the
@@ -123,7 +123,12 @@ only ever write the one bespoke tool function.
    doesn't).
 4. **Hosting** — the fabricated worker must run somewhere durable. Interim:
    templates ship a Dockerfile and a deploy-shaped README ("you host it" is a
-   documented step, not a shrug). End state: managed gards — see below.
+   documented step, not a shrug). End state: managed gards — and the first
+   managed workload is connectors, not coding agents (`decision-log.md` § The
+   cloud boundary): a connector needs no snapshots, tunnels, or code
+   extraction, so hosting it is the provisioner's minimum viable form. The
+   builder then arrives into a tenant whose capability layer is already
+   hosted, making almost everything compose mode.
 5. **Secrets** — the builder can scaffold Slack code but cannot conjure the
    bot token. The provisioner/gard design needs env-var secrets injection, and
    the builder flow needs a human step ("paste your token"). Norns core stays
@@ -147,6 +152,14 @@ recommendation.
 ---
 
 ## The builder itself
+
+**Placement: the builder is a Norns Cloud product, not a core feature
+(decided 2026-08-10).** The builder is an agent — it makes LLM calls and runs
+a loop — which is exactly what the orchestrator must never do; it cannot live
+in core without breaking purity. Structurally it is a client of the API, and
+the hosted form runs as an agent *on* Norns with a cloud-operated worker
+(dogfooding). Core ships the primitives; cloud ships the builder. See
+`decision-log.md` § The cloud boundary.
 
 The builder can start as low-tech as a skill: a coding agent following the
 scaffold's `AGENTS.md` against the existing API is already a working

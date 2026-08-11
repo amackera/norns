@@ -1,7 +1,7 @@
 # Norns Roadmap
 
-**Status:** v2
-**Last updated:** 2026-08-08
+**Status:** v3
+**Last updated:** 2026-08-10
 
 Sequencing for the next phase of work. For what's already built and why, see
 `decision-log.md`. For the product direction this sequence serves, see
@@ -37,6 +37,16 @@ durability branch (Durable MCP → custom workflows) stays parked, not dead —
 `plan-durable-mcp.md` remains Phase 0 for `plan-custom-agent-workflows.md`
 whenever it's picked up.
 
+**The cloud boundary is decided (2026-08-10,** `decision-log.md` **§ The
+cloud boundary).** Core (OSS) ships the runtime and the primitives below —
+each independently useful, none builder-only. Cloud ships the builder (an
+agent running on Norns; it can't live in core without breaking orchestrator
+purity), the provisioner, managed gards, and managed connectors. The
+provisioner's **first product is managed connectors** — no snapshots, no
+tunnels, no code extraction, just supervised containers with injected
+secrets — which de-risks the provisioner and hosts the capability layer the
+builder later composes against.
+
 ---
 
 ## The sequence
@@ -47,8 +57,8 @@ flowchart TB
     B["2 — Cron triggers<br/>triggers table · Oban · API + nornsctl"]
     C["3 — Gards Phase 1<br/>registry + dispatch filter (+ secrets requirement)"]
     D["4 — Fabricate toolkit<br/>templates · scaffold AGENTS.md · nornsctl --wait"]
-    E["5 — Inbound webhooks<br/>POST /api/v1/hooks/:token"]
-    F["6 — Provisioner<br/>separate repo · managed gards"]
+    E["5 — Inbound webhooks<br/>POST /api/v1/hooks/:token · signature verification"]
+    F["6 — Provisioner<br/>separate repo · managed connectors first, then coding-agent gards"]
     A --> B --> C --> D --> E --> F
 ```
 
@@ -89,14 +99,19 @@ than optional.
 
 `POST /api/v1/hooks/:hook_token` → run on the mapped agent, with optional
 conversation-key extraction from the payload. Pure ingress, per-hook token
-auth. Makes Twilio/Mailgun/GitHub/Stripe integration configuration instead of
-code.
+auth — plus provider signature verification (Slack signing secret, Stripe
+signature) designed in from the start. Makes Twilio/Mailgun/GitHub/Stripe
+integration configuration instead of code, shrinking the set of things that
+need a connector at all.
 
 ### 6. Provisioner (separate repo)
 
-Phases 2+ of `gards.md`: Docker provisioner, code extraction, tunnels, then
-snapshots and Firecracker. This is the "own the provisioner" commitment —
-managed gards as the home for builder output.
+Phases 2+ of `gards.md`, **connector workload first**: supervised containers
+running prebuilt connector images with injected secrets — the managed-
+connector product, and the provisioner's minimum viable form. Then the
+coding-agent additions (code extraction, tunnels), then snapshots and
+Firecracker. This is the "own the provisioner" commitment — managed gards as
+the home for the tenant's capability layer and, later, builder output.
 
 ---
 
@@ -110,9 +125,27 @@ managed gards as the home for builder output.
   (2026-08-08).
 - **Cross-SDK parity gaps** — Python serial task handling (a real concurrency
   bug under load), per-request LLM keys, model-string separator, graceful
-  shutdown. Small and independently shippable.
+  shutdown. Small and independently shippable — and the first two stop being
+  optional once connectors run 24/7 in managed gards (see Cloud readiness).
 - **Skírnir** (`skirnir-v0.1-spec.md`) — its runtime blocker (HITL wiring) is
   gone; build whenever the Elixir flagship demo is wanted.
+
+---
+
+## Cloud readiness
+
+Not sequenced above because none blocks the primitives — but each becomes
+real the moment there is a hosted product, and the core API must not paint
+itself into a corner on any of them (`decision-log.md` § Cloud readiness):
+
+- **API key scoping** — one bearer token is full tenant power today; a hosted
+  builder holding one is the trust problem the introspection toolkit was
+  pruned for. Scoped keys are the pre-cloud form of the capability model.
+- **Tenant self-serve** — signup → tenant → key issuance. Cloud-repo work.
+- **Retention plan** — cron-triggered agents generate events unboundedly;
+  needed before cloud launch, not before growth forces it.
+- **SDK hardening** — serial task handling and graceful shutdown, for
+  connectors that run 24/7.
 
 ---
 
@@ -133,7 +166,8 @@ Carried forward, deliberately unscheduled:
   supports it, not built. Note: `SubagentPolicy` and tool selection are both
   bespoke policy checks — a third one is the signal to build the generic hook.
 - **Retention, cleanup, partitioning.** Priority #4 in
-  `lessons-absurd-production.md`. Plan before growth forces it.
+  `lessons-absurd-production.md`. Promoted to a cloud-launch prerequisite —
+  see Cloud readiness above.
 - **Two-phase step API.** Prototype only if a concrete workflow needs it.
 - **Fan-out / descendant budget.** `max_depth` bounds recursion, not cost; a
   real spend ceiling is a different mechanism.
@@ -159,7 +193,7 @@ promise in-process behaviour that the multi-tenant product cannot deliver.
 
 - `decision-log.md` — what's built and why
 - `plan-agent-builder.md` — product direction: compose/fabricate, triggers, pruned alternatives
-- `gards.md` — worker affinity design (Draft v4)
+- `gards.md` — worker affinity design (Draft v6, connector-first provisioner)
 - `plan-subagent-allowlists.md` — agent authorization (Phase 1 shipped)
 - `plan-durable-mcp.md` — durable step protocol (parked)
 - `plan-custom-agent-workflows.md` — `@agent` + `ctx.*` durable primitives (parked)

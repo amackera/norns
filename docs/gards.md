@@ -1,6 +1,6 @@
 # Norns Gards — Design Document
 
-## Status: Draft (v5) — Phase 1 is next up (`roadmap.md` step 3); the provisioner is on the critical path per the fork decision in `decision-log.md`
+## Status: Draft (v6) — Phase 1 is next up (`roadmap.md` step 3); the provisioner is on the critical path per the fork decision in `decision-log.md`, and its first product is managed connectors (§ The cloud boundary)
 
 ## Summary
 
@@ -803,9 +803,10 @@ The provisioner is NOT part of Norns. It's a separate CLI/service.
 2. **Create infrastructure** — Docker container, VM, or local directory
 3. **Inject secrets** — worker credentials (Slack tokens, DB creds, LLM keys) as env vars into the gard. Norns never stores them; the human supplies them to the provisioner. Required by the agent-builder flow (`plan-agent-builder.md`), so the Phase 1 schema must not preclude it.
 4. **Start worker** — passes `gard_id` and `claim_token`, worker connects to Norns
-5. **Set up port exposure** — tunnels for remote, direct for local
-6. **Handle code extraction** — git push, file copy, artifact upload
-7. **Handle teardown** — stop worker, destroy infra, `DELETE /api/gards`
+5. **Keep it running** — supervise the worker: restart on crash, reconnect on network loss. For long-lived connector workers this is the core value, not an afterthought.
+6. **Set up port exposure** — tunnels for remote, direct for local (coding-agent workload only)
+7. **Handle code extraction** — git push, file copy, artifact upload (coding-agent workload only)
+8. **Handle teardown** — stop worker, destroy infra, `DELETE /api/gards`
 
 ### Network Note
 
@@ -890,10 +891,19 @@ If snapshots are paired with conversation checkpoints, the `checkpoint_saved` ev
 
 ### Phase 2: Provisioner (Separate Repo)
 
+**First target: the connector workload, not the coding-agent workload
+(decided 2026-08-10, `decision-log.md` § The cloud boundary).** A connector
+worker (Slack, Discord) needs none of the hard parts — no snapshots, no
+tunnels (Socket Mode connects outbound), no code extraction. It is "run this
+container with these env vars, restart it if it dies": the provisioner's
+minimum viable form, and it answers a hosting pain users have before any
+builder exists. Secrets injection (responsibility 3) covers the token.
+
 1. Local provisioner: creates gard record, prints instructions
-2. Docker provisioner: creates container, copies project, starts worker, maps ports
-3. Code extraction: git push and file copy commands
-4. Tunnel integration: optional ngrok/cloudflare/bore setup
+2. Docker provisioner: creates container, injects secrets, starts worker, supervises it (restart on crash)
+3. Connector images: prebuilt worker images (`slack-connector`, …) run from a template + secrets — the managed-connector product
+4. Coding-agent additions: project copy-in, code extraction (git push / file copy), port mapping
+5. Tunnel integration: optional ngrok/cloudflare/bore setup
 
 ### Phase 3: Snapshots
 

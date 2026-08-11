@@ -1,6 +1,6 @@
 # Decision Log
 
-Last updated: 2026-08-08
+Last updated: 2026-08-10
 
 ## Product Decisions
 
@@ -24,6 +24,12 @@ Last updated: 2026-08-08
 - We sell compute (managed gards), not just durability semantics. Fabricated workers need somewhere durable to run; that somewhere is ours to operate.
 - The orchestrator stays pure — the provisioner is a separate product, per `gards.md`.
 - Durable MCP → custom workflows is parked, not dead.
+
+### The cloud boundary (decided 2026-08-10)
+- The builder is an agent — it makes LLM calls and runs a loop — which is exactly what the orchestrator must never do. It cannot live in core without breaking purity. Structurally it is a client of the API: read the tool catalog, write defs, send test messages, read events.
+- Open-core split: **core (OSS)** is the runtime plus the primitives — tool selection, triggers, webhooks, tool catalog, gard registry. Each is independently useful; none is builder-only. **Cloud** is the builder (run as an agent on Norns with a cloud-operated worker), the provisioner, managed gards, and managed connectors.
+- Cloud sells "you don't run anything," not withheld features.
+- **Managed connectors are the provisioner's first product.** A connector worker needs none of the hard parts of the coding-agent workload — no snapshots, no tunnels (Socket Mode is outbound), no code extraction. It is "run this container with these env vars, restart it if it dies": the provisioner's minimum viable form, answering a pain that exists before any builder does. Coding-agent gards come after.
 
 ### Workers own everything
 - Workers hold API keys, database credentials, tool implementations.
@@ -123,3 +129,11 @@ Last updated: 2026-08-08
 
 ### Per-agent tool selection
 - Every agent currently sees every tool in the tenant (`process.ex` builds the LLM tool list unfiltered). Decided: add a tool allowlist to `AgentDef`, same shape as `SubagentPolicy`. Not built. First step in `roadmap.md`.
+
+### Cloud readiness
+Gaps that become real the moment there is a hosted product (see `roadmap.md` § Cloud readiness):
+- **API key scoping** — one bearer token is full tenant power today. A hosted builder holding a tenant token is the same trust problem the worker introspection toolkit was pruned for; scoped keys (read-only, def-write-only) are the pre-cloud form of the capability model.
+- **Tenant self-serve** — signup → tenant → key issuance is cloud-repo work, but the core API must not preclude it.
+- **Retention** — cron-triggered agents generate events unboundedly; needs a plan before cloud launch, not before growth.
+- **Webhook signature verification** — per-hook tokens plus provider signatures (Slack signing secret, Stripe signature) belong in the hooks design from the start.
+- **SDK hardening** — the Python serial-task bug and missing graceful shutdown are tolerable for dev workers, not for connectors running 24/7 in managed gards.
