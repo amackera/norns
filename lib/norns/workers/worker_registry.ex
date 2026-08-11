@@ -17,10 +17,11 @@ defmodule Norns.Workers.WorkerRegistry do
 
   # -- Public API --
 
-  @doc "Register a worker with its tool definitions and capabilities."
+  @doc "Register a worker with its tool definitions, capabilities, and optional gard."
   def register_worker(tenant_id, worker_id, channel_pid, tools, opts \\ []) do
     capabilities = Keyword.get(opts, :capabilities, [:tools])
-    GenServer.call(__MODULE__, {:register, tenant_id, worker_id, channel_pid, tools, capabilities})
+    gard = Keyword.get(opts, :gard)
+    GenServer.call(__MODULE__, {:register, tenant_id, worker_id, channel_pid, tools, capabilities, gard})
   end
 
   @doc """
@@ -32,9 +33,20 @@ defmodule Norns.Workers.WorkerRegistry do
     GenServer.cast(__MODULE__, {:unregister, tenant_id, worker_id, channel_pid})
   end
 
-  @doc "Get all tools from connected workers for a tenant, as %Tool{} structs."
-  def available_tools(tenant_id) do
-    GenServer.call(__MODULE__, {:available_tools, tenant_id})
+  @doc """
+  Get all tools from connected workers for a tenant, as %Tool{} structs.
+
+  Gard-filtered with strict equality: without `gard:`, only no-gard workers'
+  tools are returned; with it, only that gard's. The tool list advertised to
+  the LLM must only contain tools dispatch could actually reach.
+  """
+  def available_tools(tenant_id, opts \\ []) do
+    GenServer.call(__MODULE__, {:available_tools, tenant_id, Keyword.get(opts, :gard)})
+  end
+
+  @doc "Kick every worker claiming `gard_id` — used when the gard is destroyed."
+  def kick_gard_workers(tenant_id, gard_id) do
+    GenServer.cast(__MODULE__, {:kick_gard_workers, tenant_id, gard_id})
   end
 
   @doc "Check if any worker with LLM capability is available for a tenant (or :default)."
@@ -92,7 +104,7 @@ defmodule Norns.Workers.WorkerRegistry do
   end
 
   @impl true
-  def handle_call({:register, tenant_id, worker_id, channel_pid, tools, capabilities}, _from, state) do
+  def handle_call({:register, tenant_id, worker_id, channel_pid, tools, capabilities, gard}, _from, state) do
     key = {tenant_id, worker_id}
 
     # A registration under a key that already holds a worker means a reconnect
@@ -109,7 +121,8 @@ defmodule Norns.Workers.WorkerRegistry do
       tools: tools,
       capabilities: capabilities,
       monitor_ref: ref,
-      tenant_id: tenant_id
+      tenant_id: tenant_id,
+      gard: gard
     }
 
     state = put_in(state.workers[key], worker)
@@ -119,7 +132,10 @@ defmodule Norns.Workers.WorkerRegistry do
       |> Enum.map(&tool_name/1)
       |> Enum.reduce(state, fn name, acc ->
         tenant_id
-        |> TaskQueue.flush(name)
+        # Gard-strict flush: a queued gard-bound task must never flush to a
+        # worker in a different gard (or no gard) — that would silently break
+        # the affinity invariant right when the run resumes.
+        |> TaskQueue.flush(name, gard: gard)
         |> Enum.reduce(acc, fn task, pending_state ->
           push_to_worker(channel_pid, {:push_tool_task, task_payload(task)})
           put_in(pending_state.pending[task.task_id], %{from_pid: task.from_pid, tenant_id: tenant_id, type: :tool, worker_key: key})
@@ -141,12 +157,14 @@ defmodule Norns.Workers.WorkerRegistry do
     {:reply, :ok, state}
   end
 
-  def handle_call({:available_tools, tenant_id}, _from, state) do
+  def handle_call({:available_tools, tenant_id, gard}, _from, state) do
     # Only return tools from tenant-specific workers, not the default worker.
     # Default worker tools are in Tools.Registry (local).
+    # Strict gard equality (nil == nil): without it, a gard-bound run would be
+    # offered tools from other gards that dispatch would then fail to reach.
     tools =
       state.workers
-      |> Enum.filter(fn {{tid, _}, _} -> tid == tenant_id end)
+      |> Enum.filter(fn {{tid, _}, w} -> tid == tenant_id and w.gard == gard end)
       |> Enum.flat_map(fn {_, worker} -> worker.tools end)
       |> Enum.map(fn tool_def ->
         %Tool{
@@ -216,8 +234,18 @@ defmodule Norns.Workers.WorkerRegistry do
     agent_id = Keyword.get(opts, :agent_id)
     run_id = Keyword.get(opts, :run_id)
     from_pid = Keyword.get(opts, :from_pid, self())
+    gard = Keyword.get(opts, :gard)
 
-    worker = find_worker(state, tenant_id, fn w -> Process.alive?(w.channel_pid) and Enum.any?(w.tools, &(tool_name(&1) == tool_name)) end)
+    # Strict gard equality (nil == nil, "a" == "a"): no-gard runs never grab a
+    # gard-bound worker (stolen dispatch), gard runs never fall through to a
+    # no-gard worker (filesystem state leakage). The :default-tenant fallback
+    # in find_worker only ever holds no-gard workers, so it can only fire when
+    # gard is nil — a gard-bound run never falls back to a generic worker.
+    worker =
+      find_worker(state, tenant_id, fn w ->
+        Process.alive?(w.channel_pid) and w.gard == gard and
+          Enum.any?(w.tools, &(tool_name(&1) == tool_name))
+      end)
 
     case worker do
       {key, w} ->
@@ -243,7 +271,8 @@ defmodule Norns.Workers.WorkerRegistry do
           input: input,
           from_pid: from_pid,
           agent_id: agent_id,
-          run_id: run_id
+          run_id: run_id,
+          gard: gard
         }
 
         TaskQueue.enqueue(tenant_id, task)
@@ -256,10 +285,11 @@ defmodule Norns.Workers.WorkerRegistry do
     key = {tenant_id, worker_id}
 
     case state.workers[key] do
-      %{channel_pid: stored_pid, monitor_ref: ref}
+      %{channel_pid: stored_pid, monitor_ref: ref} = worker
       when is_nil(channel_pid) or stored_pid == channel_pid ->
         Process.demonitor(ref, [:flush])
         Logger.info("Worker #{worker_id} unregistered from tenant #{tenant_id}")
+        mark_gard_disconnected(worker)
 
         state = %{state | workers: Map.delete(state.workers, key)}
         # Fail this worker's in-flight tasks so agents retry instead of hanging
@@ -297,11 +327,23 @@ defmodule Norns.Workers.WorkerRegistry do
     end
   end
 
+  def handle_cast({:kick_gard_workers, tenant_id, gard_id}, state) do
+    state.workers
+    |> Enum.filter(fn {{tid, _}, w} -> tid == tenant_id and w.gard == gard_id end)
+    |> Enum.each(fn {_, w} -> send(w.channel_pid, :gard_destroyed) end)
+
+    # The channel stops itself, which runs its terminate → unregister → the
+    # normal disconnect cascade (task reclaim, mark_disconnected no-op since
+    # the gard is already destroyed).
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case Enum.find(state.workers, fn {_, w} -> w.monitor_ref == ref end) do
-      {{tenant_id, worker_id} = key, _worker} ->
+      {{tenant_id, worker_id} = key, worker} ->
         Logger.info("Worker #{worker_id} disconnected from tenant #{tenant_id}")
+        mark_gard_disconnected(worker)
         state = %{state | workers: Map.delete(state.workers, key)}
 
         # Fail this worker's in-flight tasks — the agent retry policy re-dispatches
@@ -340,6 +382,28 @@ defmodule Norns.Workers.WorkerRegistry do
 
     %{state | pending: remaining}
   end
+
+  # Both the unregister and DOWN paths can fire on the same disconnect;
+  # Gards.mark_disconnected is idempotent, so calling it from both is safe.
+  #
+  # Isolated in an unlinked task: the registry holds every worker connection,
+  # so a database hiccup must not crash it. The status write is best-effort
+  # bookkeeping — a reconnecting worker re-claims the gard regardless.
+  defp mark_gard_disconnected(%{gard: gard, tenant_id: tenant_id}) when not is_nil(gard) do
+    Task.start(fn ->
+      try do
+        Norns.Gards.mark_disconnected(tenant_id, gard)
+      rescue
+        e -> Logger.warning("failed to mark gard #{gard} disconnected: #{Exception.message(e)}")
+      catch
+        :exit, reason -> Logger.warning("failed to mark gard #{gard} disconnected: #{inspect(reason)}")
+      end
+    end)
+
+    :ok
+  end
+
+  defp mark_gard_disconnected(_worker), do: :ok
 
   defp tool_name(%{"name" => name}), do: name
   defp tool_name(name) when is_binary(name), do: name

@@ -24,6 +24,7 @@ defmodule NornsWeb.JSON do
       conversation_id: run.conversation_id,
       parent_run_id: run.parent_run_id,
       depth: run.depth,
+      gard_id: run.gard_id,
       status: run.status,
       trigger_type: run.trigger_type,
       input: run.input,
@@ -35,6 +36,29 @@ defmodule NornsWeb.JSON do
       output_tokens: run.output_tokens || 0,
       inserted_at: run.inserted_at,
       updated_at: run.updated_at
+    }
+  end
+
+  # Never includes the claim token — that's returned once, on create.
+  def gard(gard) do
+    %{
+      id: gard.id,
+      name: gard.name,
+      status: gard.status,
+      template: gard.template,
+      metadata: gard.metadata || %{},
+      inserted_at: gard.inserted_at,
+      updated_at: gard.updated_at
+    }
+  end
+
+  def gard_port(port) do
+    %{
+      id: port.id,
+      internal_port: port.internal_port,
+      url: port.url,
+      name: port.name,
+      protocol: port.protocol
     }
   end
 

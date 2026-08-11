@@ -18,9 +18,16 @@ defmodule Norns.Workers.TaskQueue do
     GenServer.cast(__MODULE__, {:enqueue, tenant_id, task})
   end
 
-  @doc "Flush and return all queued tasks for a tool name."
-  def flush(tenant_id, tool_name) do
-    GenServer.call(__MODULE__, {:flush, tenant_id, tool_name})
+  @doc """
+  Flush and return all queued tasks for a tool name.
+
+  Pass `gard:` to match strictly on the task's gard (nil matches only
+  no-gard tasks) — a queued gard-bound task must never flush to a worker in
+  a different gard. Without the option, gard is ignored (LLM tasks have no
+  filesystem affinity).
+  """
+  def flush(tenant_id, tool_name, opts \\ []) do
+    GenServer.call(__MODULE__, {:flush, tenant_id, tool_name, opts})
   end
 
   @doc "Get queue depth for a tenant (for monitoring)."
@@ -45,9 +52,16 @@ defmodule Norns.Workers.TaskQueue do
   end
 
   @impl true
-  def handle_call({:flush, tenant_id, tool_name}, _from, state) do
+  def handle_call({:flush, tenant_id, tool_name, opts}, _from, state) do
     queue = Map.get(state.queues, tenant_id, [])
-    {matching, remaining} = Enum.split_with(queue, &(&1.tool_name == tool_name))
+
+    matcher =
+      case Keyword.fetch(opts, :gard) do
+        {:ok, gard} -> fn task -> task.tool_name == tool_name and Map.get(task, :gard) == gard end
+        :error -> fn task -> task.tool_name == tool_name end
+      end
+
+    {matching, remaining} = Enum.split_with(queue, matcher)
     state = put_in(state.queues[tenant_id], remaining)
     {:reply, matching, state}
   end

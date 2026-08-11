@@ -55,6 +55,10 @@ defmodule NornsWeb.Router do
       post "/fire", TriggerController, :fire
     end
 
+    resources "/gards", GardController, only: [:create, :index, :show, :update, :delete] do
+      get "/ports", GardController, :ports
+    end
+
     get "/runs", RunController, :index
     get "/runs/:id", RunController, :show
     get "/runs/:id/events", RunController, :events

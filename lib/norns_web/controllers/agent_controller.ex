@@ -69,7 +69,8 @@ defmodule NornsWeb.AgentController do
     opts = if is_binary(conversation_key) and conversation_key != "", do: [conversation_key: conversation_key], else: []
     opts = if is_map(context), do: Keyword.put(opts, :context, context), else: opts
 
-    with {:ok, agent} <- fetch_agent(agent_id, tenant.id) do
+    with {:ok, agent} <- fetch_agent(agent_id, tenant.id),
+         {:ok, opts} <- put_gard_opt(opts, tenant.id, Map.get(params, "gard_id")) do
       case Registry.send_message(tenant.id, agent.id, content, opts) do
         {:ok, run_id} -> conn |> put_status(202) |> json(%{status: "accepted", run_id: run_id})
         {:error, :busy} -> conn |> put_status(409) |> json(%{error: "agent is busy"})
@@ -80,6 +81,17 @@ defmodule NornsWeb.AgentController do
 
   def send_message(conn, %{"agent_id" => _}) do
     conn |> put_status(422) |> json(%{error: "missing required field: content"})
+  end
+
+  # A gard id from another tenant (or a typo) would create a run no worker can
+  # ever serve — reject it as not-found rather than letting it queue to timeout.
+  defp put_gard_opt(opts, _tenant_id, nil), do: {:ok, opts}
+
+  defp put_gard_opt(opts, tenant_id, gard_id) do
+    case Norns.Gards.get_gard(tenant_id, gard_id) do
+      nil -> {:error, :not_found}
+      gard -> {:ok, Keyword.put(opts, :gard_id, gard.id)}
+    end
   end
 
   def runs(conn, %{"agent_id" => agent_id}) do

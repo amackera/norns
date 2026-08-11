@@ -30,6 +30,7 @@ lib/norns/
   conversations/    — Conversation schema + context (persistent chat history)
   runs/             — Run + RunEvent schemas, Runs context (event log)
   runtime/          — Event contracts, error taxonomy, retry policy
+  gards/            — Gard + GardPort schemas; Gards context (worker affinity)
   triggers/         — Trigger schema + context (cron schedules that start runs)
   workers/          — WorkerRegistry, TaskQueue, ResumeAgents, TriggerScheduler
   llm.ex            — LLM dispatcher (used by workers via Fake in tests)

@@ -12,12 +12,19 @@ defmodule Norns.TestWorker do
   alias Norns.Workers.WorkerRegistry
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    case Keyword.get(opts, :name, __MODULE__) do
+      nil -> GenServer.start_link(__MODULE__, opts)
+      name -> GenServer.start_link(__MODULE__, opts, name: name)
+    end
   end
 
   @impl true
   def init(opts) do
     tools = Keyword.get(opts, :tools, [])
+    tenant = Keyword.get(opts, :tenant, :default)
+    worker_id = Keyword.get(opts, :worker_id, "test-worker")
+    capabilities = Keyword.get(opts, :capabilities, [:llm, :tools])
+    gard = Keyword.get(opts, :gard)
 
     tool_defs =
       Enum.map(tools, fn tool ->
@@ -30,11 +37,12 @@ defmodule Norns.TestWorker do
       end)
 
     WorkerRegistry.register_worker(
-      :default,
-      "test-worker",
+      tenant,
+      worker_id,
       self(),
       tool_defs,
-      capabilities: [:llm, :tools]
+      capabilities: capabilities,
+      gard: gard
     )
 
     {:ok, %{tools: tools}}
