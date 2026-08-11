@@ -59,6 +59,8 @@ nornsctl runs list [--agent <id>] [--limit N] # List runs
 nornsctl runs show <id>                       # Run details + failure inspector
 nornsctl runs events <id> [--json]            # Full event log for a run
 nornsctl runs retry <id>                      # Retry a failed run
+nornsctl triggers list [--agent <id>]         # List cron triggers
+nornsctl triggers fire <id>                   # Fire a trigger now, outside its schedule
 nornsctl conversations list <agent_id>        # List conversations
 nornsctl conversations show <agent_id> <key>  # Conversation details
 ```

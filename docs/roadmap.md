@@ -78,7 +78,8 @@ per-minute claim so a trigger fires at most once per matching minute. Full
 CRUD at `/api/v1/triggers` plus `POST /triggers/:id/fire` for testing a
 trigger outside its schedule. Runs carry `trigger_type: "schedule"`. Norns is
 the system of record — composed agents have no repo for config to live in.
-Remaining: `nornsctl triggers` subcommands (separate repo).
+`nornsctl triggers` (list/show/create/update/enable/disable/delete/fire)
+shipped in the nornsctl repo the same day.
 
 ### 3. Gards Phase 1
 
