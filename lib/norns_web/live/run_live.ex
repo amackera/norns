@@ -56,7 +56,11 @@ defmodule NornsWeb.RunLive do
     <div class="grid grid-cols-4 gap-4 mb-6">
       <div class="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded p-3">
         <div class="text-xs text-gray-500">Trigger</div>
-        <div class="text-sm"><%= @run.trigger_type %></div>
+        <div class="text-sm">
+          <%= @run.trigger_type %><%= if @run.gard_id do %>
+            <span class="text-xs text-gray-500 ml-2">gard #<%= @run.gard_id %></span>
+          <% end %>
+        </div>
       </div>
       <div class="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded p-3">
         <div class="text-xs text-gray-500">Started</div>

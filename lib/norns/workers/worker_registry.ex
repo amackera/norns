@@ -185,7 +185,7 @@ defmodule Norns.Workers.WorkerRegistry do
       state.workers
       |> Enum.filter(fn {{tid, _}, w} -> tid == tenant_id and Process.alive?(w.channel_pid) end)
       |> Enum.map(fn {{_tid, worker_id}, w} ->
-        %{worker_id: worker_id, capabilities: w.capabilities, tool_count: length(w.tools)}
+        %{worker_id: worker_id, capabilities: w.capabilities, tool_count: length(w.tools), gard: w.gard}
       end)
 
     {:reply, workers, state}
