@@ -9,7 +9,7 @@ defmodule Norns.Agents.Process do
   require Logger
 
   alias Norns.{Agents, Conversations, Runs, Tenants}
-  alias Norns.Agents.{AgentDef, SubagentPolicy}
+  alias Norns.Agents.{AgentDef, SubagentPolicy, ToolPolicy}
   alias Norns.Runtime.{ErrorPolicy, Errors, Events}
   alias Norns.Workers.WorkerRegistry
   alias Norns.Tools.{Builtins, Idempotency, Tool}
@@ -227,10 +227,13 @@ defmodule Norns.Agents.Process do
     else
       state = %{state | step: state.step + 1}
 
-      # Resolve tools at dispatch time: built-ins + agent_def tools + worker-registered tools
+      # Resolve tools at dispatch time: built-ins + agent_def tools + worker-registered
+      # tools, the latter two filtered by the agent's tool policy. Built-ins are
+      # orchestrator semantics — launch_agent/list_agents have their own policy.
+      policy = state.agent_def.tool_policy
       builtin_tools = Builtins.all()
-      agent_tools = state.agent_def.tools
-      worker_tools = WorkerRegistry.available_tools(state.tenant_id)
+      agent_tools = ToolPolicy.filter(policy, state.agent_def.tools)
+      worker_tools = ToolPolicy.filter(policy, WorkerRegistry.available_tools(state.tenant_id))
       all_tools = (builtin_tools ++ agent_tools ++ worker_tools) |> Enum.uniq_by(& &1.name)
       tools = Enum.map(all_tools, &Tool.to_api_format/1)
 
@@ -324,6 +327,16 @@ defmodule Norns.Agents.Process do
     {launch_agent_blocks, regular_blocks} =
       Enum.split_with(remaining, fn block -> block["name"] == "launch_agent" end)
 
+    # Enforce the tool policy at dispatch, not just at advertisement — the
+    # model can name a tool it was never offered, or the allowlist can have
+    # changed mid-conversation. Built-ins were already split out above.
+    {denied_blocks, regular_blocks} =
+      Enum.split_with(regular_blocks, fn block ->
+        ToolPolicy.authorize(state.agent_def.tool_policy, block["name"]) != :ok
+      end)
+
+    denied_results = resolve_denied_tools(state, denied_blocks, log_calls?)
+
     # Resolve list_agents synchronously — results go into the pool immediately
     list_agents_results = resolve_list_agents(state, list_agents_blocks, log_calls?)
 
@@ -331,7 +344,7 @@ defmodule Norns.Agents.Process do
     {launch_results, launch_pending, state} =
       resolve_launch_agents(state, launch_agent_blocks, log_calls?)
 
-    sync_results = list_agents_results ++ launch_results
+    sync_results = denied_results ++ list_agents_results ++ launch_results
 
     # Log tool_call events for regular (worker-dispatched) blocks
     if log_calls? do
@@ -393,6 +406,40 @@ defmodule Norns.Agents.Process do
     else
       handle_pause_or_continue(state, wait_blocks, ask_blocks, sync_results, log_calls?)
     end
+  end
+
+  # A denied tool call gets an error result back to the LLM (recoverable — it
+  # can pick an allowed tool) and a tool_call_denied audit event, mirroring
+  # the subagent decision trail.
+  defp resolve_denied_tools(state, blocks, log_calls?) do
+    Enum.map(blocks, fn block ->
+      if log_calls? do
+        append(state.run, Events.tool_call(%{
+          "tool_call_id" => block["id"],
+          "name" => block["name"],
+          "arguments" => block["arguments"] || %{},
+          "step" => state.step
+        }))
+      end
+
+      policy = state.agent_def.tool_policy
+
+      append(state.run, Events.build("tool_call_denied", %{
+        "requesting_agent_id" => state.agent_id,
+        "requesting_agent_name" => (state.agent && state.agent.name) || "",
+        "mode" => to_string(policy.mode),
+        "tool_name" => block["name"],
+        "reason" => "not_allowlisted",
+        "step" => state.step
+      }))
+
+      make_error_tool_result(
+        state,
+        block,
+        block["name"],
+        "Tool '#{block["name"]}' is not in this agent's allowed tools."
+      )
+    end)
   end
 
   defp resolve_list_agents(state, blocks, log_calls?) do

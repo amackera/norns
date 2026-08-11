@@ -109,6 +109,11 @@ Last updated: 2026-08-10
 - `Norns.Agents.SubagentPolicy` — per-agent authorization for `launch_agent` / `list_agents`, with audit events. Defaults open; existing agents unaffected.
 - Phase 1 of `plan-subagent-allowlists.md`; phases 2–3 remain proposed.
 
+### Per-agent tool selection
+- `Norns.Agents.ToolPolicy` — per-agent allowlist of worker-provided tools, parsed from `model_config["tools"]` (same shape and defaults philosophy as `SubagentPolicy`). Defaults open; existing agents unaffected.
+- Enforced twice: the allowlist filters the tool list advertised to the LLM, and dispatch rejects a call outside it (error result back to the model, `tool_call_denied` audit event). Built-ins are exempt — `launch_agent`/`list_agents` are governed by `SubagentPolicy`.
+- The compose-mode prerequisite from `plan-agent-builder.md`: agents can now be assembled from a subset of the tenant's capability layer.
+
 ### Sub-agent crash recovery
 - A resumed parent reattaches to its in-flight child by run id instead of relaunching it — a pending `launch_agent` is a reference to work already underway, not a request.
 - Subscribe-before-read closes the completion race; `run_id` rides on every agent broadcast; a parent resumed alone restarts its own orphaned child.
@@ -125,10 +130,7 @@ Last updated: 2026-08-10
 ### Policy enforcement
 - Pre-dispatch hook point in the orchestrator (not built, architecture supports it).
 - Rule-based (orchestrator evaluates) and LLM-evaluated (worker evaluates) flavors.
-- `SubagentPolicy` and the planned per-agent tool selection are both bespoke policy checks; a third one is the signal to build the generic hook.
-
-### Per-agent tool selection
-- Every agent currently sees every tool in the tenant (`process.ex` builds the LLM tool list unfiltered). Decided: add a tool allowlist to `AgentDef`, same shape as `SubagentPolicy`. Not built. First step in `roadmap.md`.
+- `SubagentPolicy` and `ToolPolicy` are both bespoke policy checks; a third one is the signal to build the generic hook.
 
 ### Cloud readiness
 Gaps that become real the moment there is a hosted product (see `roadmap.md` § Cloud readiness):
