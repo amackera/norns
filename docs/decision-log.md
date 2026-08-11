@@ -120,6 +120,14 @@ Last updated: 2026-08-10
 - Runs started by a trigger carry `trigger_type: "schedule"`. Cron expressions validated with `Oban.Cron.Expression` at write time.
 - Default is task mode (fresh conversation per firing); setting `conversation_key` opts into shared history across firings.
 
+### Gards Phase 1 (core)
+- `Norns.Gards` — gard registry with server-generated 256-bit claim tokens, atomic claim (one winner among simultaneous claimants), idempotent disconnect marking, soft-delete destroy with active-run guard and worker kick.
+- Dispatch is gard-strict end to end: `find_worker` strict equality, `available_tools` gard-filtered, TaskQueue flush matches `{tenant, tool, gard}`. LLM dispatch deliberately unfiltered (no filesystem affinity).
+- Gard binds per-run (`send_message gard_id:`), children inherit the parent's gard, resume restores affinity from the run row, idempotency keys include the gard (no-gard keys keep the historical shape, so pre-gard runs replay correctly).
+- The disconnect status write runs in an isolated task — a database hiccup must not crash the registry that holds every worker connection.
+- REST: gard CRUD (claim token returned exactly once, on create) + ports; workers register ports over their channel, gard inferred from the connection.
+- Remaining Phase 1 surface: `nornsctl gard`, dashboard page, Python SDK support.
+
 ### Sub-agent crash recovery
 - A resumed parent reattaches to its in-flight child by run id instead of relaunching it — a pending `launch_agent` is a reference to work already underway, not a request.
 - Subscribe-before-read closes the completion race; `run_id` rides on every agent broadcast; a parent resumed alone restarts its own orphaned child.

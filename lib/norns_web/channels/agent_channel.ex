@@ -21,14 +21,29 @@ defmodule NornsWeb.AgentChannel do
   end
 
   @impl true
-  def handle_in("send_message", %{"content" => content}, socket) do
+  def handle_in("send_message", %{"content" => content} = params, socket) do
     tenant_id = socket.assigns.tenant_id
     agent_id = socket.assigns.agent_id
 
-    case Norns.Agents.Registry.send_message(tenant_id, agent_id, content) do
-      {:ok, run_id} -> {:reply, {:ok, %{run_id: run_id}}, socket}
+    with {:ok, gard_id} <- validate_gard(tenant_id, Map.get(params, "gard_id")),
+         {:ok, run_id} <-
+           Norns.Agents.Registry.send_message(tenant_id, agent_id, content, gard_id: gard_id) do
+      {:reply, {:ok, %{run_id: run_id}}, socket}
+    else
+      {:error, :gard_not_found} -> {:reply, {:error, %{reason: "gard not found"}}, socket}
       {:error, :busy} -> {:reply, {:error, %{reason: "agent is busy"}}, socket}
       {:error, reason} -> {:reply, {:error, %{reason: inspect(reason)}}, socket}
+    end
+  end
+
+  # A gard id from another tenant (or a typo) would create a run no worker can
+  # ever serve — reject it up front rather than letting it queue to timeout.
+  defp validate_gard(_tenant_id, nil), do: {:ok, nil}
+
+  defp validate_gard(tenant_id, gard_id) do
+    case Norns.Gards.get_gard(tenant_id, gard_id) do
+      nil -> {:error, :gard_not_found}
+      gard -> {:ok, gard.id}
     end
   end
 

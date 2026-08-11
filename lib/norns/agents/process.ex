@@ -36,11 +36,13 @@ defmodule Norns.Agents.Process do
       launched by another run. Absent for user-initiated runs.
     * `:trigger_type` — what started the run: `"message"` (default) or
       `"schedule"` (cron trigger).
+    * `:gard_id` — bind this run to a gard: all tool dispatch goes only to
+      workers in that gard. Per-run, not per-process.
   """
   def send_message(pid, content, opts \\ []) when is_binary(content) do
     lineage =
       opts
-      |> Keyword.take([:context, :parent_run_id, :depth, :trigger_type])
+      |> Keyword.take([:context, :parent_run_id, :depth, :trigger_type, :gard_id])
       |> Keyword.put_new(:depth, 0)
 
     GenServer.call(pid, {:send_message, content, lineage}, 10_000)
@@ -102,6 +104,7 @@ defmodule Norns.Agents.Process do
       task_timer: nil,
       pending_subagents: %{},
       pending_human: nil,
+      gard_id: nil,
       resume_action: nil,
       test_pid: Keyword.get(opts, :test_pid),
       input_tokens: 0,
@@ -120,6 +123,7 @@ defmodule Norns.Agents.Process do
   @impl true
   def handle_call({:send_message, content, opts}, _from, %{status: :idle} = state) do
     context = Keyword.get(opts, :context)
+    gard_id = Keyword.get(opts, :gard_id)
     state = load_conversation_state(state)
     messages = messages_for_new_run(state, content, context)
 
@@ -135,13 +139,14 @@ defmodule Norns.Agents.Process do
         input: input,
         status: "pending",
         parent_run_id: Keyword.get(opts, :parent_run_id),
-        depth: Keyword.get(opts, :depth, 0)
+        depth: Keyword.get(opts, :depth, 0),
+        gard_id: gard_id
       })
 
     append(run, Events.run_started())
     {:ok, run} = Runs.update_run(run, %{status: "running"})
 
-    state = %{state | run: run, messages: messages, step: 0, retry_count: 0, status: :running, resume_action: nil}
+    state = %{state | run: run, messages: messages, step: 0, retry_count: 0, status: :running, gard_id: gard_id, resume_action: nil}
 
     broadcast(state, :agent_started, %{run_id: run.id})
     {:reply, {:ok, run.id}, state, {:continue, :llm_loop}}
@@ -235,7 +240,12 @@ defmodule Norns.Agents.Process do
       policy = state.agent_def.tool_policy
       builtin_tools = Builtins.all()
       agent_tools = ToolPolicy.filter(policy, state.agent_def.tools)
-      worker_tools = ToolPolicy.filter(policy, WorkerRegistry.available_tools(state.tenant_id))
+
+      worker_tools =
+        ToolPolicy.filter(
+          policy,
+          WorkerRegistry.available_tools(state.tenant_id, gard: state.gard_id)
+        )
       all_tools = (builtin_tools ++ agent_tools ++ worker_tools) |> Enum.uniq_by(& &1.name)
       tools = Enum.map(all_tools, &Tool.to_api_format/1)
 
@@ -382,7 +392,8 @@ defmodule Norns.Agents.Process do
             WorkerRegistry.dispatch_task(state.tenant_id, tc["name"], tc["arguments"],
               from_pid: self(),
               agent_id: state.agent_id,
-              run_id: state.run.id
+              run_id: state.run.id,
+              gard: state.gard_id
             )
 
           {task_id, tc}
@@ -642,10 +653,15 @@ defmodule Norns.Agents.Process do
 
         conversation_key = "subagent_#{block["id"]}_#{System.unique_integer([:positive])}"
 
+        # A child working on the same task should see the same filesystem —
+        # inherit the parent's gard unless the call names a different one.
+        child_gard = get_in(block, ["arguments", "gard_id"]) || st.gard_id
+
         spawn_opts = [
           conversation_key: conversation_key,
           parent_run_id: st.run && st.run.id,
-          depth: child_depth
+          depth: child_depth,
+          gard_id: child_gard
         ]
 
         spawn_opts = if context, do: Keyword.put(spawn_opts, :context, context), else: spawn_opts
@@ -1311,7 +1327,10 @@ defmodule Norns.Agents.Process do
        |> Map.put(:status, :running)
        |> Map.put(:resume_action, resume_action)
        |> Map.put(:input_tokens, input_tokens)
-       |> Map.put(:output_tokens, output_tokens)}
+       |> Map.put(:output_tokens, output_tokens)
+       # The gard rides on the run row — a resumed run must keep its
+       # affinity or replayed tool dispatch would leak to no-gard workers.
+       |> Map.put(:gard_id, run.gard_id)}
     end
   end
 

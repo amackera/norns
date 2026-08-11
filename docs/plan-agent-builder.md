@@ -1,7 +1,7 @@
 # Plan: Agent Builder
 
 **Status:** Direction agreed (2026-08-08); cloud boundary decided (2026-08-10) — builder ships as a Norns Cloud product, sequencing in `roadmap.md`
-**Depends on:** per-agent tool selection (shipped 2026-08-10), cron triggers (shipped 2026-08-10), gards Phase 1 (`gards.md`)
+**Depends on:** per-agent tool selection (shipped 2026-08-10), cron triggers (shipped 2026-08-10), gards Phase 1 (core shipped 2026-08-10, `gards.md`)
 
 The product direction: a builder that turns "create a Slack bot that posts the
 current call count to #general every Friday" into a running, durable agent.

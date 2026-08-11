@@ -55,7 +55,7 @@ builder later composes against.
 flowchart TB
     A["1 — Per-agent tool selection ✓<br/>ToolPolicy on AgentDef — shipped 2026-08-10"]
     B["2 — Cron triggers ✓<br/>triggers table · Oban · API — shipped 2026-08-10"]
-    C["3 — Gards Phase 1<br/>registry + dispatch filter (+ secrets requirement)"]
+    C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — core shipped 2026-08-10"]
     D["4 — Fabricate toolkit<br/>templates · scaffold AGENTS.md · nornsctl --wait"]
     E["5 — Inbound webhooks<br/>POST /api/v1/hooks/:token · signature verification"]
     F["6 — Provisioner<br/>separate repo · managed connectors first, then coding-agent gards"]
@@ -81,12 +81,16 @@ the system of record — composed agents have no repo for config to live in.
 `nornsctl triggers` (list/show/create/update/enable/disable/delete/fire)
 shipped in the nornsctl repo the same day.
 
-### 3. Gards Phase 1
+### 3. Gards Phase 1 — core shipped (2026-08-10)
 
-Registry + dispatch filter, per `gards.md` — unchanged scope, two additions
-from the builder work: secrets injection (env into the gard) is a named
-provisioner requirement, and the provisioner is on the critical path rather
-than optional.
+Registry + dispatch filter, per `gards.md`: `gards`/`gard_ports` tables,
+atomic claim tokens, strict-equality dispatch (no-gard runs never touch gard
+workers and vice versa), gard-filtered tool advertisement, gard-aware
+TaskQueue flush, per-run binding with child inheritance and resume-safe
+affinity, gard-scoped idempotency keys, REST CRUD + worker-channel port
+registration. Remaining from the Phase 1 list: `nornsctl gard` commands,
+the `/gards` dashboard page, and Python SDK `gard`/`claim_token` support.
+Secrets injection stays a named provisioner (Phase 2) requirement.
 
 ### 4. Fabricate toolkit
 
