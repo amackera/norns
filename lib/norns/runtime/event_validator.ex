@@ -79,6 +79,9 @@ defmodule Norns.Runtime.EventValidator do
       decision when decision in ["subagent_launch_allowed", "subagent_launch_denied", "subagent_list_allowed", "subagent_list_denied"] ->
         [schema_version_validator(), required_integer("requesting_agent_id"), required_string("mode"), required_integer("step")]
 
+      "tool_call_denied" ->
+        [schema_version_validator(), required_integer("requesting_agent_id"), required_string("mode"), required_string("tool_name"), required_string("reason"), required_integer("step")]
+
       "waiting_for_timer" -> [schema_version_validator(), required_string("tool_call_id"), required_integer("seconds"), required_integer("step")]
       "waiting_for_user" -> [schema_version_validator(), required_string("question"), required_string("tool_call_id"), required_integer("step")]
       "user_response" -> [schema_version_validator(), required_string("content"), required_string("tool_call_id"), required_integer("step")]

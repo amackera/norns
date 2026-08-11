@@ -53,7 +53,7 @@ builder later composes against.
 
 ```mermaid
 flowchart TB
-    A["1 — Per-agent tool selection<br/>allowlist on AgentDef, filters available_tools"]
+    A["1 — Per-agent tool selection ✓<br/>ToolPolicy on AgentDef — shipped 2026-08-10"]
     B["2 — Cron triggers<br/>triggers table · Oban · API + nornsctl"]
     C["3 — Gards Phase 1<br/>registry + dispatch filter (+ secrets requirement)"]
     D["4 — Fabricate toolkit<br/>templates · scaffold AGENTS.md · nornsctl --wait"]
@@ -62,13 +62,13 @@ flowchart TB
     A --> B --> C --> D --> E --> F
 ```
 
-### 1. Per-agent tool selection
+### 1. Per-agent tool selection — done (2026-08-10)
 
-Today every agent sees every tool in the tenant (`process.ex:233` — builtins +
-def tools + all worker tools, unfiltered). Composing agents from a shared
-capability layer is impossible without scoping, and it's a safety gap
-regardless. Add a tool allowlist to `AgentDef`, same shape and defaults
-philosophy as `SubagentPolicy`. Small, prerequisite for everything below.
+Shipped as `Norns.Agents.ToolPolicy`: a per-agent allowlist of worker tools
+in `model_config["tools"]`, same shape and defaults philosophy as
+`SubagentPolicy`. Filters the advertised tool list and rejects out-of-policy
+calls at dispatch with a `tool_call_denied` audit event; built-ins exempt.
+See `decision-log.md` § Implemented.
 
 ### 2. Cron triggers
 

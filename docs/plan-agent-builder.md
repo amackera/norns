@@ -1,7 +1,7 @@
 # Plan: Agent Builder
 
 **Status:** Direction agreed (2026-08-08); cloud boundary decided (2026-08-10) — builder ships as a Norns Cloud product, sequencing in `roadmap.md`
-**Depends on:** per-agent tool selection (not built), cron triggers (not built), gards Phase 1 (`gards.md`)
+**Depends on:** per-agent tool selection (shipped 2026-08-10), cron triggers (not built), gards Phase 1 (`gards.md`)
 
 The product direction: a builder that turns "create a Slack bot that posts the
 current call count to #general every Friday" into a running, durable agent.
@@ -47,19 +47,20 @@ agent is compose — the builder ships it without deploying anything.
 
 ## What compose mode requires
 
-### 1. Per-agent tool selection (the one core gap)
+### 1. Per-agent tool selection (the one core gap) — shipped 2026-08-10
 
-Today every agent sees every tool in the tenant: `process.ex` builds the LLM
-tool list as builtins + def tools + **all** worker tools, unfiltered
-(`process.ex:233`). "Assemble existing tools differently" is impossible when
-every agent gets the same assembly — and it's a safety problem independent of
-the builder (the call-count bot is also offered `send_email` and
-`delete_record`).
+Previously every agent saw every tool in the tenant: the LLM tool list was
+builtins + def tools + **all** worker tools, unfiltered. "Assemble existing
+tools differently" is impossible when every agent gets the same assembly —
+and it's a safety problem independent of the builder (the call-count bot is
+also offered `send_email` and `delete_record`).
 
-Fix: a tool allowlist on the AgentDef that filters `available_tools`. Same
-shape as `SubagentPolicy` (default `open` for backwards compatibility,
-explicit selection opts in), motivated by the same incident class. This is the
-prerequisite for everything else in compose mode.
+Shipped as `Norns.Agents.ToolPolicy`: a tool allowlist in
+`model_config["tools"]`, same shape as `SubagentPolicy` (default `open` for
+backwards compatibility, explicit selection opts in), motivated by the same
+incident class. It filters the advertised tool list and rejects
+out-of-policy calls at dispatch with a `tool_call_denied` audit event. This
+was the prerequisite for everything else in compose mode.
 
 ### 2. Cron triggers, as first-class Norns data
 
