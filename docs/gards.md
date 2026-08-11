@@ -1,6 +1,6 @@
 # Norns Gards — Design Document
 
-## Status: v7 — Phase 1 core shipped 2026-08-10 (registry, claims, strict dispatch, per-run binding, API; `nornsctl`/dashboard/Python SDK still open). The provisioner is on the critical path per the fork decision in `decision-log.md`, and its first product is managed connectors (§ The cloud boundary)
+## Status: v8 — Phase 1 shipped in full 2026-08-10 (registry, claims, strict dispatch, per-run binding, API, `nornsctl gards`, dashboard, Python SDK). Next: Phase 2 provisioner, connector workload first — see `decision-log.md` § The cloud boundary
 
 ## Summary
 
