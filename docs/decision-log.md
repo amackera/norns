@@ -128,6 +128,12 @@ Last updated: 2026-08-10
 - REST: gard CRUD (claim token returned exactly once, on create) + ports; workers register ports over their channel, gard inferred from the connection.
 - Full surface: `nornsctl gards` commands, `/gards` dashboard page, Python SDK `gard`/`claim_token` on `run()` + `register_port` (fatal vs retryable claim failures distinguished — `already_claimed` retries because a quick reconnect can race the disconnect bookkeeping; bad token/destroyed gard raise instead of spinning).
 
+### Fabricate toolkit (nornsctl repo, 2026-08-11)
+- `nornsctl new --template default|slack-bot` — templates as generation targets; slack-bot ships outbound Slack tools with the token held only by the worker.
+- Every scaffold ships `AGENTS.md` — the v0 builder: any coding agent dropped into the project learns the scaffold → worker → test message → read events → iterate loop, the tool conventions (docstring is the interface, `side_effect=True` for writes), and the debugging playbook.
+- `nornsctl agents message --wait` — the missing loop primitive; terminal-state summary or the parked question with its reply command.
+- Found and fixed en route: litellm 1.96.1 ships cp310-only wheels, breaking every fresh `norns-sdk` install on Python 3.11+ — excluded in the SDK (needs a PyPI release) and constrained in the templates until then.
+
 ### Sub-agent crash recovery
 - A resumed parent reattaches to its in-flight child by run id instead of relaunching it — a pending `launch_agent` is a reference to work already underway, not a request.
 - Subscribe-before-read closes the completion race; `run_id` rides on every agent broadcast; a parent resumed alone restarts its own orphaned child.

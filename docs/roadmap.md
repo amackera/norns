@@ -56,7 +56,7 @@ flowchart TB
     A["1 — Per-agent tool selection ✓<br/>ToolPolicy on AgentDef — shipped 2026-08-10"]
     B["2 — Cron triggers ✓<br/>triggers table · Oban · API — shipped 2026-08-10"]
     C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — shipped 2026-08-10"]
-    D["4 — Fabricate toolkit<br/>templates · scaffold AGENTS.md · nornsctl --wait"]
+    D["4 — Fabricate toolkit ✓<br/>templates · scaffold AGENTS.md · --wait — shipped 2026-08-11"]
     E["5 — Inbound webhooks<br/>POST /api/v1/hooks/:token · signature verification"]
     F["6 — Provisioner<br/>separate repo · managed connectors first, then coding-agent gards"]
     A --> B --> C --> D --> E --> F
@@ -94,16 +94,24 @@ SDK support (`norns.run(agent, gard=, claim_token=)` + `register_port`) —
 verified end to end against a live worker. Secrets injection stays a named
 provisioner (Phase 2) requirement.
 
-### 4. Fabricate toolkit
+### 4. Fabricate toolkit — done (2026-08-11)
 
-- `nornsctl new --template <name>` — templates as generation targets
-  (`slack-bot`, `slack-connector`, …). The builder writes one tool function,
-  not a system.
-- Scaffold ships `AGENTS.md` teaching any coding agent the build/test/debug
-  loop. This is the v0 builder.
-- `nornsctl agents message --wait` — the missing loop primitive (SDK already
-  has `wait=True`).
-- Templates ship a Dockerfile + deploy README as the interim hosting story.
+Shipped in the nornsctl repo:
+
+- `nornsctl new --template <name>` — `default` and `slack-bot` (outbound
+  `post_to_slack` / `list_slack_channels`; the bot token never leaves the
+  worker). The builder writes one tool function, not a system.
+- Every scaffold ships `AGENTS.md` teaching any coding agent the full
+  build/test/debug loop (scaffold → worker up → test message → read run
+  events → iterate). This is the v0 builder.
+- `nornsctl agents message --wait` — blocks until the run completes (prints
+  output), fails (prints the failure inspector), or parks on a question
+  (prints it with the reply command). Verified live.
+- Templates ship a Dockerfile + deploy notes as the interim hosting story.
+
+Still open from the template family: a `slack-connector` variant (Socket
+Mode inbound listener) — the scaffold's `AGENTS.md` documents the pattern;
+build it with the first connector-hosting work.
 
 ### 5. Inbound webhooks
 
@@ -129,7 +137,9 @@ the home for the tenant's capability layer and, later, builder output.
 
 - **Slack connector template/example.** The most demo-able thing Norns could
   have: conversations keyed by thread, `ask_human` relayed into the channel,
-  durability visible in a channel people actually use. Falls out of step 4.
+  durability visible in a channel people actually use. The outbound half
+  shipped as the `slack-bot` template (step 4); the inbound Socket Mode
+  listener remains.
 - **Blog post** — sub-agent recovery write-up: published as
   ["Is This Still Happening?"](https://mackeracher.com/posts/is-this-still-happening/)
   (2026-08-08).
