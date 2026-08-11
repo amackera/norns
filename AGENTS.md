@@ -30,7 +30,8 @@ lib/norns/
   conversations/    — Conversation schema + context (persistent chat history)
   runs/             — Run + RunEvent schemas, Runs context (event log)
   runtime/          — Event contracts, error taxonomy, retry policy
-  workers/          — WorkerRegistry, TaskQueue, ResumeAgents
+  triggers/         — Trigger schema + context (cron schedules that start runs)
+  workers/          — WorkerRegistry, TaskQueue, ResumeAgents, TriggerScheduler
   llm.ex            — LLM dispatcher (used by workers via Fake in tests)
   llm/              — Behaviour, Anthropic adapter, Format (neutral ↔ Anthropic), Fake
   tools/            — Behaviour, Tool struct, Executor, Registry, Idempotency

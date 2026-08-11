@@ -38,7 +38,11 @@ defmodule Norns.Agents.Registry do
 
     case ensure_started(agent_id, tenant_id, conversation_key, opts) do
       {:ok, pid} ->
-        AgentProcess.send_message(pid, content, Keyword.take(opts, [:context, :parent_run_id, :depth]))
+        AgentProcess.send_message(
+          pid,
+          content,
+          Keyword.take(opts, [:context, :parent_run_id, :depth, :trigger_type])
+        )
 
       {:error, reason} ->
         {:error, reason}

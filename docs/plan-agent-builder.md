@@ -1,7 +1,7 @@
 # Plan: Agent Builder
 
 **Status:** Direction agreed (2026-08-08); cloud boundary decided (2026-08-10) — builder ships as a Norns Cloud product, sequencing in `roadmap.md`
-**Depends on:** per-agent tool selection (shipped 2026-08-10), cron triggers (not built), gards Phase 1 (`gards.md`)
+**Depends on:** per-agent tool selection (shipped 2026-08-10), cron triggers (shipped 2026-08-10), gards Phase 1 (`gards.md`)
 
 The product direction: a builder that turns "create a Slack bot that posts the
 current call count to #general every Friday" into a running, durable agent.
@@ -62,16 +62,19 @@ incident class. It filters the advertised tool list and rejects
 out-of-policy calls at dispatch with a `tool_call_denied` audit event. This
 was the prerequisite for everything else in compose mode.
 
-### 2. Cron triggers, as first-class Norns data
+### 2. Cron triggers, as first-class Norns data — shipped 2026-08-10
 
 A composed agent has no repo, so trigger config cannot live in one. Triggers
-are Norns data: a `triggers` table (agent_id, cron expression, message
-template), fired by Oban (already a dependency), managed via API and
-`nornsctl`. The SDK may later grow `Agent(triggers: [...])` as sync sugar, but
-**Norns is the system of record**.
+are Norns data: a `triggers` table (agent_id, cron expression, message,
+optional persistent conversation key), fired by a minutely Oban job with an
+atomic per-minute claim, managed via `/api/v1/triggers` (including
+`POST /triggers/:id/fire` for testing outside the schedule). The SDK may
+later grow `Agent(triggers: [...])` as sync sugar, but **Norns is the system
+of record**.
 
-This also puts `trigger_type` to work: `"message"` / `"schedule"` /
-`"webhook"` on runs, improving filtering and debugging for free.
+This also put `trigger_type` to work: runs started by a trigger carry
+`"schedule"`, improving filtering and debugging for free. `"webhook"`
+arrives with inbound webhooks.
 
 ### 3. Inbound webhooks (Layer 2 of the trigger surface)
 

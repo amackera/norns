@@ -9,7 +9,8 @@ config :norns, Norns.Repo,
 config :norns, Oban,
   repo: Norns.Repo,
   plugins: [
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    {Oban.Plugins.Cron, crontab: [{"* * * * *", Norns.Workers.TriggerScheduler}]}
   ],
   queues: [default: 10]
 

@@ -54,7 +54,7 @@ builder later composes against.
 ```mermaid
 flowchart TB
     A["1 — Per-agent tool selection ✓<br/>ToolPolicy on AgentDef — shipped 2026-08-10"]
-    B["2 — Cron triggers<br/>triggers table · Oban · API + nornsctl"]
+    B["2 — Cron triggers ✓<br/>triggers table · Oban · API — shipped 2026-08-10"]
     C["3 — Gards Phase 1<br/>registry + dispatch filter (+ secrets requirement)"]
     D["4 — Fabricate toolkit<br/>templates · scaffold AGENTS.md · nornsctl --wait"]
     E["5 — Inbound webhooks<br/>POST /api/v1/hooks/:token · signature verification"]
@@ -70,12 +70,15 @@ in `model_config["tools"]`, same shape and defaults philosophy as
 calls at dispatch with a `tool_call_denied` audit event; built-ins exempt.
 See `decision-log.md` § Implemented.
 
-### 2. Cron triggers
+### 2. Cron triggers — done (2026-08-10)
 
-`triggers` table (agent, cron expression, message template), fired by Oban
-(already a dependency), managed via API + `nornsctl triggers`. Norns is the
-system of record — composed agents have no repo for config to live in. Runs
-gain `trigger_type: "schedule"`.
+Shipped: `triggers` table (agent, cron expression, message, optional
+persistent `conversation_key`), fired by a minutely Oban job with an atomic
+per-minute claim so a trigger fires at most once per matching minute. Full
+CRUD at `/api/v1/triggers` plus `POST /triggers/:id/fire` for testing a
+trigger outside its schedule. Runs carry `trigger_type: "schedule"`. Norns is
+the system of record — composed agents have no repo for config to live in.
+Remaining: `nornsctl triggers` subcommands (separate repo).
 
 ### 3. Gards Phase 1
 

@@ -38,6 +38,21 @@ defmodule NornsWeb.JSON do
     }
   end
 
+  def trigger(trigger) do
+    %{
+      id: trigger.id,
+      agent_id: trigger.agent_id,
+      name: trigger.name,
+      cron: trigger.cron,
+      message: trigger.message,
+      conversation_key: trigger.conversation_key,
+      enabled: trigger.enabled,
+      last_fired_at: trigger.last_fired_at,
+      inserted_at: trigger.inserted_at,
+      updated_at: trigger.updated_at
+    }
+  end
+
   def tool(tool) do
     %{
       name: tool.name,
