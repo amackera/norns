@@ -65,6 +65,8 @@ nornsctl triggers list [--agent <id>]         # List cron triggers
 nornsctl triggers fire <id>                   # Fire a trigger now, outside its schedule
 nornsctl gards list                           # List gards (worker execution contexts)
 nornsctl gards create [--name N]              # Create a gard, prints its claim token once
+nornsctl hooks list                           # List inbound webhooks
+nornsctl hooks create --agent <id> --name ... # Create a webhook, prints its delivery URL
 nornsctl conversations list <agent_id>        # List conversations
 nornsctl conversations show <agent_id> <key>  # Conversation details
 ```
