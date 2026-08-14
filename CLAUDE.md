@@ -31,6 +31,7 @@ lib/norns/
   runs/             — Run + RunEvent schemas, Runs context (event log)
   runtime/          — Event contracts, error taxonomy, retry policy
   gards/            — Gard + GardPort schemas; Gards context (worker affinity)
+  hooks/            — Hook schema, Signature verification; Hooks context (webhook ingress)
   triggers/         — Trigger schema + context (cron schedules that start runs)
   workers/          — WorkerRegistry, TaskQueue, ResumeAgents, TriggerScheduler
   llm.ex            — LLM dispatcher (used by workers via Fake in tests)

@@ -76,7 +76,7 @@ This also put `trigger_type` to work: runs started by a trigger carry
 `"schedule"`, improving filtering and debugging for free. `"webhook"`
 arrives with inbound webhooks.
 
-### 3. Inbound webhooks (Layer 2 of the trigger surface)
+### 3. Inbound webhooks (Layer 2 of the trigger surface) — shipped 2026-08-13
 
 Many services just POST to a URL (Twilio, Mailgun/SES inbound email, GitHub,
 Stripe). For those, a connector process is pointless glue. One small, pure

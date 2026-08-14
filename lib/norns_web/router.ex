@@ -36,6 +36,10 @@ defmodule NornsWeb.Router do
     pipe_through :api_public
 
     post "/telemetry/first-run", TelemetryController, :first_run
+
+    # Webhook ingress — the token in the path is the credential; provider
+    # signature verification happens in the controller against the raw body.
+    post "/hooks/:token", HookIngestController, :create
   end
 
   scope "/api/v1", NornsWeb do
@@ -59,6 +63,10 @@ defmodule NornsWeb.Router do
     resources "/gards", GardController, only: [:create, :index, :show, :update, :delete] do
       get "/ports", GardController, :ports
     end
+
+    # Hook management. No collision with public ingest: ingest is POST
+    # /hooks/:token, and nothing here answers POST on /hooks/:id.
+    resources "/hooks", HookController, only: [:create, :index, :show, :update, :delete]
 
     get "/runs", RunController, :index
     get "/runs/:id", RunController, :show
