@@ -134,6 +134,12 @@ Last updated: 2026-08-10
 - `nornsctl agents message --wait` — the missing loop primitive; terminal-state summary or the parked question with its reply command.
 - Found and fixed en route: litellm 1.96.1 ships cp310-only wheels, breaking every fresh `norns-sdk` install on Python 3.11+ — excluded in the SDK (needs a PyPI release) and constrained in the templates until then.
 
+### Inbound webhooks
+- `POST /api/v1/hooks/:token` — public ingress that starts a run on the mapped agent (`trigger_type: "webhook"`). The server-generated token in the URL is the credential; unknown and disabled tokens answer identically.
+- Provider signatures verified against the **raw body** (cached by a scoped `body_reader` before JSON parsing): `github` (X-Hub-Signature-256), `stripe` (t/v1 with replay bound), `slack` (v0 with replay bound). Constant-time comparison throughout; a signature type requires a secret at write time.
+- `message_path` extracts the run message from the payload (default: the whole payload as pretty JSON); `conversation_key_path` keys persistent history per sender, namespaced `hook_{id}_` so hook-derived keys can't collide with client keys.
+- Busy conversations return 409 — webhook providers retry non-2xx, which is the desired backoff for free.
+
 ### Sub-agent crash recovery
 - A resumed parent reattaches to its in-flight child by run id instead of relaunching it — a pending `launch_agent` is a reference to work already underway, not a request.
 - Subscribe-before-read closes the completion race; `run_id` rides on every agent broadcast; a parent resumed alone restarts its own orphaned child.

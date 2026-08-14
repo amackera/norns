@@ -29,7 +29,8 @@ defmodule NornsWeb.Endpoint do
   plug Plug.Parsers,
     parsers: [:urlencoded, :json],
     pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+    json_decoder: Phoenix.json_library(),
+    body_reader: {NornsWeb.CacheBodyReader, :read_body, []}
 
   plug Plug.Session, @session_options
   plug NornsWeb.Router

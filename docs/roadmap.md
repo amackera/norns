@@ -57,7 +57,7 @@ flowchart TB
     B["2 — Cron triggers ✓<br/>triggers table · Oban · API — shipped 2026-08-10"]
     C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — shipped 2026-08-10"]
     D["4 — Fabricate toolkit ✓<br/>templates · scaffold AGENTS.md · --wait — shipped 2026-08-11"]
-    E["5 — Inbound webhooks<br/>POST /api/v1/hooks/:token · signature verification"]
+    E["5 — Inbound webhooks ✓<br/>POST /api/v1/hooks/:token · signatures — shipped 2026-08-13"]
     F["6 — Provisioner<br/>separate repo · managed connectors first, then coding-agent gards"]
     A --> B --> C --> D --> E --> F
 ```
@@ -113,14 +113,17 @@ Still open from the template family: a `slack-connector` variant (Socket
 Mode inbound listener) — the scaffold's `AGENTS.md` documents the pattern;
 build it with the first connector-hosting work.
 
-### 5. Inbound webhooks
+### 5. Inbound webhooks — done (2026-08-13)
 
-`POST /api/v1/hooks/:hook_token` → run on the mapped agent, with optional
-conversation-key extraction from the payload. Pure ingress, per-hook token
-auth — plus provider signature verification (Slack signing secret, Stripe
-signature) designed in from the start. Makes Twilio/Mailgun/GitHub/Stripe
-integration configuration instead of code, shrinking the set of things that
-need a connector at all.
+Shipped: `POST /api/v1/hooks/:token` starts a run on the mapped agent with
+`trigger_type: "webhook"`. Per-hook server-generated tokens; provider
+signature verification (`github`, `stripe`, `slack` — HMAC over the raw
+body, constant-time compare, replay-bounded timestamps); optional
+`message_path` (e.g. Twilio's `Body`) and `conversation_key_path` (e.g.
+`From`, so each sender keeps its own history — verified by test). Unknown
+and disabled tokens are indistinguishable; a busy conversation returns 409
+so providers retry. Management CRUD at `/api/v1/hooks` + `nornsctl hooks`.
+Twilio/Mailgun/GitHub/Stripe are now configuration instead of code.
 
 ### 6. Provisioner (separate repo)
 

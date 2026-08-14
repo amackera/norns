@@ -62,6 +62,22 @@ defmodule NornsWeb.JSON do
     }
   end
 
+  def hook(hook) do
+    %{
+      id: hook.id,
+      agent_id: hook.agent_id,
+      name: hook.name,
+      token: hook.token,
+      path: "/api/v1/hooks/#{hook.token}",
+      message_path: hook.message_path,
+      conversation_key_path: hook.conversation_key_path,
+      signature_type: hook.signature_type,
+      enabled: hook.enabled,
+      inserted_at: hook.inserted_at,
+      updated_at: hook.updated_at
+    }
+  end
+
   def trigger(trigger) do
     %{
       id: trigger.id,
