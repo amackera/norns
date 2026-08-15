@@ -138,7 +138,11 @@ secrets + workload shape), gard optional.
 
 Shape: thin stateless Go CLI, docker driver, Docker restart policy as the
 supervisor. Secrets from `--env-file`, baked into container env, never sent
-to Norns.
+to Norns. **Proprietary** (decided 2026-08-14): volund is the platform's
+killer feature — private repo, closed at every phase. The self-host path
+stays open and documented (gard API + templates' Dockerfile +
+`docker run --restart unless-stopped`); what volund sells is the
+operational layer on top.
 
 - **P0 (MVP):** `up`/`down`/`list`/`logs`/`restart`; first real workload is
   the `slack-bot` scaffold run as a supervised connector.

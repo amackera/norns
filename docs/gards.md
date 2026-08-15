@@ -805,8 +805,12 @@ Norns doesn't proxy. It stores URLs and shows them in the dashboard.
 
 ## Provisioner (Separate Tool)
 
-The provisioner is NOT part of Norns. It's a separate CLI/service. Its unit
-is a **deployment** — name + image + secrets + workload shape. A gard is
+The provisioner is NOT part of Norns. It's a separate CLI/service —
+**volund**, a proprietary cloud product (decided 2026-08-14). This section
+documents the *contract* any provisioner programs against; the interface is
+open even though volund is not, and the templates' Dockerfile plus
+`docker run --restart unless-stopped --env-file .env` is the documented
+self-host path. Its unit is a **deployment** — name + image + secrets + workload shape. A gard is
 optional per-deployment: connector deployments have none (their tools must
 be tenant-wide); coding-agent deployments get one (they need filesystem
 affinity). Responsibilities 1, 6, and 7 below apply only to gard-bearing
