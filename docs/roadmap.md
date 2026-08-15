@@ -1,7 +1,7 @@
 # Norns Roadmap
 
-**Status:** v3
-**Last updated:** 2026-08-10
+**Status:** v4
+**Last updated:** 2026-08-14
 
 Sequencing for the next phase of work. For what's already built and why, see
 `decision-log.md`. For the product direction this sequence serves, see
@@ -13,8 +13,10 @@ Sequencing for the next phase of work. For what's already built and why, see
 
 The core is shipping: durable agent process, orchestrator/worker split,
 provider-neutral LLM format, conversations, REST API + dashboard, multi-agent
-orchestration, and both SDKs published (Python on PyPI, Elixir on Hex as of
-v0.1.0).
+orchestration, and both SDKs published (Python on PyPI at 0.3.0 with gard
+support, Elixir on Hex). Norns itself is at **v0.5** ("agents are
+configuration"), and steps 1–5 below are all shipped — the sequence now
+points at exactly one thing: the provisioner.
 
 The v1 roadmap's "Now" tier is **done**: subagent allowlists shipped
 (`SubagentPolicy`), human-in-the-loop is fully wired (`ask_human` /
@@ -58,7 +60,7 @@ flowchart TB
     C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — shipped 2026-08-10"]
     D["4 — Fabricate toolkit ✓<br/>templates · scaffold AGENTS.md · --wait — shipped 2026-08-11"]
     E["5 — Inbound webhooks ✓<br/>POST /api/v1/hooks/:token · signatures — shipped 2026-08-13"]
-    F["6 — Provisioner<br/>separate repo · managed connectors first, then coding-agent gards"]
+    F["6 — Provisioner (norns-provision)<br/>separate repo · no-gard connectors first, then coding-agent gards"]
     A --> B --> C --> D --> E --> F
 ```
 
@@ -125,14 +127,34 @@ and disabled tokens are indistinguishable; a busy conversation returns 409
 so providers retry. Management CRUD at `/api/v1/hooks` + `nornsctl hooks`.
 Twilio/Mailgun/GitHub/Stripe are now configuration instead of code.
 
-### 6. Provisioner (separate repo)
+### 6. Provisioner — `norns-provision` (separate repo)
 
-Phases 2+ of `gards.md`, **connector workload first**: supervised containers
-running prebuilt connector images with injected secrets — the managed-
-connector product, and the provisioner's minimum viable form. Then the
-coding-agent additions (code extraction, tunnels), then snapshots and
-Firecracker. This is the "own the provisioner" commitment — managed gards as
-the home for the tenant's capability layer and, later, builder output.
+Phases 2+ of `gards.md`, **connector workload first — as no-gard workers**
+(corrected 2026-08-14, `decision-log.md` § The provisioner's unit is a
+deployment): gard-strict dispatch means a gard-bound connector's tools would
+be invisible to ordinary runs, so connectors are supervised no-gard service
+workers and the provisioner's unit is a *deployment* (name + image +
+secrets + workload shape), gard optional.
+
+Shape: thin stateless Go CLI, docker driver, Docker restart policy as the
+supervisor. Secrets from `--env-file`, baked into container env, never sent
+to Norns.
+
+- **P0 (MVP):** `up`/`down`/`list`/`logs`/`restart`; first real workload is
+  the `slack-bot` scaffold run as a supervised connector.
+- **P1:** gard workloads — `up --gard` (create gard, inject
+  `GARD_ID`/`CLAIM_TOKEN`), workspace copy-in, code extraction, port
+  mapping.
+- **P2:** the managed product — control plane over the same driver
+  interface, prebuilt connector images, tunnels, snapshots, billing.
+
+Two prerequisites in existing repos, both small: **`GET /api/v1/workers`**
+(`WorkerRegistry.connected_workers/1` exists; `list` needs it over REST to
+tell healthy from crash-looping) and the **Python SDK serial-task fix**
+(ship as 0.3.1 — 24/7 connectors are the workload it bites).
+
+This is the "own the provisioner" commitment — managed deployments as the
+home for the tenant's capability layer and, later, builder output.
 
 ---
 
@@ -147,9 +169,12 @@ the home for the tenant's capability layer and, later, builder output.
   ["Is This Still Happening?"](https://mackeracher.com/posts/is-this-still-happening/)
   (2026-08-08).
 - **Cross-SDK parity gaps** — Python serial task handling (a real concurrency
-  bug under load), per-request LLM keys, model-string separator, graceful
-  shutdown. Small and independently shippable — and the first two stop being
-  optional once connectors run 24/7 in managed gards (see Cloud readiness).
+  bug under load; now a named provisioner prerequisite — ship as SDK 0.3.1),
+  per-request LLM keys, model-string separator, graceful shutdown. Small and
+  independently shippable — and the first two stop being optional once
+  connectors run 24/7 under the provisioner (see Cloud readiness).
+- **Template hygiene** — drop the `litellm!=1.96.1` uv constraint from the
+  scaffold templates; SDK 0.3.0 carries the exclusion itself.
 - **Skírnir** (`skirnir-v0.1-spec.md`) — its runtime blocker (HITL wiring) is
   gone; build whenever the Elixir flagship demo is wanted.
 
@@ -216,7 +241,7 @@ promise in-process behaviour that the multi-tenant product cannot deliver.
 
 - `decision-log.md` — what's built and why
 - `plan-agent-builder.md` — product direction: compose/fabricate, triggers, pruned alternatives
-- `gards.md` — worker affinity design (Draft v6, connector-first provisioner)
+- `gards.md` — worker affinity design (v9; Phase 1 shipped, provisioner phases + the no-gard-connectors correction)
 - `plan-subagent-allowlists.md` — agent authorization (Phase 1 shipped)
 - `plan-durable-mcp.md` — durable step protocol (parked)
 - `plan-custom-agent-workflows.md` — `@agent` + `ctx.*` durable primitives (parked)

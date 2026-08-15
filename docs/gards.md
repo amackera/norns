@@ -1,6 +1,16 @@
 # Norns Gards — Design Document
 
-## Status: v8 — Phase 1 shipped in full 2026-08-10 (registry, claims, strict dispatch, per-run binding, API, `nornsctl gards`, dashboard, Python SDK). Next: Phase 2 provisioner, connector workload first — see `decision-log.md` § The cloud boundary
+## Status: v9 — Phase 1 shipped in full 2026-08-10 (registry, claims, strict dispatch, per-run binding, API, `nornsctl gards`, dashboard, Python SDK). Next: Phase 2 provisioner — but note the correction below: connectors run as **no-gard** workers; the first *gard* workload is coding agents. See `decision-log.md` § The provisioner's unit is a deployment
+
+> **Correction (2026-08-14): connectors don't use gards.** Earlier drafts
+> said the provisioner's first workload is connectors *in gards*. That can't
+> work: dispatch is gard-strict in both directions, so a gard-bound
+> connector's tools would be invisible to ordinary (no-gard) runs — the
+> exact opposite of a tenant-wide capability layer. Connectors are supervised
+> **no-gard** service workers; their tools serve every run. Gards are for
+> workloads that need filesystem affinity (coding agents). The provisioner's
+> unit is therefore a **deployment** (name + image + secrets + workload
+> shape), and a gard is something only some deployments have.
 
 ## Summary
 
@@ -795,11 +805,16 @@ Norns doesn't proxy. It stores URLs and shows them in the dashboard.
 
 ## Provisioner (Separate Tool)
 
-The provisioner is NOT part of Norns. It's a separate CLI/service.
+The provisioner is NOT part of Norns. It's a separate CLI/service. Its unit
+is a **deployment** — name + image + secrets + workload shape. A gard is
+optional per-deployment: connector deployments have none (their tools must
+be tenant-wide); coding-agent deployments get one (they need filesystem
+affinity). Responsibilities 1, 6, and 7 below apply only to gard-bearing
+deployments.
 
 ### Responsibilities
 
-1. **Create gard record** — `POST /api/gards`, receives `id` + `claim_token`
+1. **Create gard record** (gard workloads only) — `POST /api/gards`, receives `id` + `claim_token`
 2. **Create infrastructure** — Docker container, VM, or local directory
 3. **Inject secrets** — worker credentials (Slack tokens, DB creds, LLM keys) as env vars into the gard. Norns never stores them; the human supplies them to the provisioner. Required by the agent-builder flow (`plan-agent-builder.md`), so the Phase 1 schema must not preclude it.
 4. **Start worker** — passes `gard_id` and `claim_token`, worker connects to Norns
@@ -815,29 +830,22 @@ When both Norns and the worker are in Docker containers on macOS, the worker's `
 ### Example CLI
 
 ```bash
-# Local: creates gard, user starts worker manually
-$ norns-provision local --name my-project --workspace ~/projects/my-app
-Gard gard_abc123 created.
-Start your worker with:
-  norns-coding-agent --gard gard_abc123 --claim-token tok_xyz789
+# P0 — connector deployment (no gard): build or pull, inject secrets, supervise
+$ norns-provision up slack --build ./my-slack-worker --env-file .env
+$ norns-provision up slack --image ghcr.io/nornscode/slack-connector --env-file .env
+$ norns-provision list          # joins container state with worker-connected state
+$ norns-provision logs slack
+$ norns-provision restart slack
+$ norns-provision down slack
 
-# Docker: creates container, starts worker, maps ports
-$ norns-provision docker --name my-project --template node-20 \
-    --project ~/projects/my-app --norns-url http://localhost:4000
-Container started. Worker connected. Gard gard_abc123 ready.
-
-# Docker remote with tunnel:
-$ norns-provision docker --name my-project --template node-20 \
-    --project ~/projects/my-app --norns-url https://norns.mycompany.com \
-    --tunnel cloudflare
-Container started. Tunnel established. Gard gard_abc123 ready.
+# P1 — coding-agent deployment (gard): provisioner creates the gard,
+# injects GARD_ID + CLAIM_TOKEN, copies the workspace in
+$ norns-provision up feature-x --gard --build ./coding-worker \
+    --workspace ~/projects/my-app --env-file .env
 
 # Extract code when done
-$ norns-provision export gard_abc123 --to ~/projects/my-app
-$ norns-provision git-push gard_abc123 --remote origin --branch agent/feature-x
-
-# Tear down
-$ norns-provision destroy gard_abc123
+$ norns-provision export feature-x --to ~/projects/my-app
+$ norns-provision git-push feature-x --remote origin --branch agent/feature-x
 ```
 
 ---
@@ -889,21 +897,39 @@ If snapshots are paired with conversation checkpoints, the `checkpoint_saved` ev
 
 **Backwards compatibility:** Runs without a gard work exactly as today. Workers without a gard work exactly as today. No-gard runs only dispatch to no-gard workers; gard runs only dispatch to matching-gard workers. Zero breaking changes. Existing deployments require no migration beyond the schema addition — gards are fully opt-in.
 
-### Phase 2: Provisioner (Separate Repo)
+### Phase 2: Provisioner (Separate Repo — `norns-provision`)
 
-**First target: the connector workload, not the coding-agent workload
-(decided 2026-08-10, `decision-log.md` § The cloud boundary).** A connector
-worker (Slack, Discord) needs none of the hard parts — no snapshots, no
-tunnels (Socket Mode connects outbound), no code extraction. It is "run this
-container with these env vars, restart it if it dies": the provisioner's
-minimum viable form, and it answers a hosting pain users have before any
-builder exists. Secrets injection (responsibility 3) covers the token.
+**First target: the connector workload — as no-gard workers (see the
+Correction at the top).** A connector (Slack, Discord) needs none of the
+hard parts — no snapshots, no tunnels (Socket Mode connects outbound), no
+code extraction, and **no gard**: its tools must be tenant-wide, which
+gard-strict dispatch forbids. It is "run this container with these env vars,
+restart it if it dies": the provisioner's minimum viable form, and it
+answers a hosting pain users have before any builder exists. Secrets
+injection (responsibility 3) covers the token.
 
-1. Local provisioner: creates gard record, prints instructions
-2. Docker provisioner: creates container, injects secrets, starts worker, supervises it (restart on crash)
-3. Connector images: prebuilt worker images (`slack-connector`, …) run from a template + secrets — the managed-connector product
-4. Coding-agent additions: project copy-in, code extraction (git push / file copy), port mapping
-5. Tunnel integration: optional ngrok/cloudflare/bore setup
+Shape: a thin, stateless Go CLI mirroring nornsctl's layout. Docker's
+`--restart unless-stopped` *is* the supervisor — no daemon in the MVP.
+Secrets are read from `--env-file` at `up` and baked into container env;
+the state file (`~/.norns-provision/state.json`) remembers the env-file
+*path*, never values, and nothing secret is ever sent to Norns. A driver
+interface (`docker` now; `fly`/`firecracker` later) keeps the managed
+service (a control plane driving the same interface) a Phase-3+ product,
+not a rewrite.
+
+- **P0 — connectors:** `up <name> --build ./dir | --image ref --env-file
+  .env`, `down`, `list`, `logs`, `restart`. `list` joins "container
+  running" with "worker connected" via `GET /api/v1/workers` (prerequisite:
+  that endpoint — `WorkerRegistry.connected_workers/1` exists but has no
+  REST exposure). Second prerequisite: the Python SDK serial-task fix —
+  supervised 24/7 connectors are exactly the workload it bites.
+- **P1 — gard workloads:** `up --gard` → `POST /api/v1/gards` → inject
+  `GARD_ID`/`CLAIM_TOKEN` env → SDK claims on connect. Adds workspace
+  copy-in, code extraction (git push / file copy), port mapping. No tunnels
+  yet.
+- **P2 — managed:** control plane driving the driver interface on our
+  infrastructure, prebuilt connector images (`slack-connector`, …), tunnels,
+  snapshots, billing — the managed-connector product.
 
 ### Phase 3: Snapshots
 

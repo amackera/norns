@@ -127,12 +127,14 @@ only ever write the one bespoke tool function.
    doesn't).
 4. **Hosting** — the fabricated worker must run somewhere durable. Interim:
    templates ship a Dockerfile and a deploy-shaped README ("you host it" is a
-   documented step, not a shrug). End state: managed gards — and the first
-   managed workload is connectors, not coding agents (`decision-log.md` § The
-   cloud boundary): a connector needs no snapshots, tunnels, or code
-   extraction, so hosting it is the provisioner's minimum viable form. The
-   builder then arrives into a tenant whose capability layer is already
-   hosted, making almost everything compose mode.
+   documented step, not a shrug). End state: managed deployments via the
+   provisioner — and the first managed workload is connectors, not coding
+   agents (`decision-log.md` § The provisioner's unit is a deployment): a
+   connector needs no snapshots, tunnels, code extraction, or gard (its
+   tools must be tenant-wide, which gard-strict dispatch forbids), so
+   hosting it is the provisioner's minimum viable form. The builder then
+   arrives into a tenant whose capability layer is already hosted, making
+   almost everything compose mode.
 5. **Secrets** — the builder can scaffold Slack code but cannot conjure the
    bot token. The provisioner/gard design needs env-var secrets injection, and
    the builder flow needs a human step ("paste your token"). Norns core stays

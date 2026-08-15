@@ -40,11 +40,12 @@ lib/norns/
 
 lib/norns_web/
   endpoint.ex       — Phoenix endpoint (REST + WebSocket + LiveView)
-  router.ex         — API routes + LiveView routes
+  router.ex         — API routes (authed + public hook ingest) + LiveView routes
   plugs/            — Auth (API bearer token), SessionAuth (browser cookies)
-  controllers/      — AgentController, RunController, ConversationController
+  cache_body_reader.ex — caches raw request body for hook signature verification
+  controllers/      — Agent, Run, Conversation, Trigger, Hook, HookIngest, Gard, Tool, Telemetry
   channels/         — AgentSocket/Channel (streaming), WorkerSocket/Channel (task dispatch)
-  live/             — AgentsLive, AgentLive, RunLive, ToolsLive, SetupLive
+  live/             — AgentsLive, AgentLive, RunLive, ToolsLive, GardsLive, TelemetryLive, SetupLive
   components/       — Layouts (root + app)
   json.ex           — Serialization helpers
 ```
