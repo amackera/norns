@@ -60,7 +60,7 @@ flowchart TB
     C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — shipped 2026-08-10"]
     D["4 — Fabricate toolkit ✓<br/>templates · scaffold AGENTS.md · --wait — shipped 2026-08-11"]
     E["5 — Inbound webhooks ✓<br/>POST /api/v1/hooks/:token · signatures — shipped 2026-08-13"]
-    F["6 — Provisioner (norns-provision)<br/>separate repo · no-gard connectors first, then coding-agent gards"]
+    F["6 — Provisioner (volund)<br/>separate repo · no-gard connectors first, then coding-agent gards"]
     A --> B --> C --> D --> E --> F
 ```
 
@@ -127,7 +127,7 @@ and disabled tokens are indistinguishable; a busy conversation returns 409
 so providers retry. Management CRUD at `/api/v1/hooks` + `nornsctl hooks`.
 Twilio/Mailgun/GitHub/Stripe are now configuration instead of code.
 
-### 6. Provisioner — `norns-provision` (separate repo)
+### 6. Provisioner — `volund` (separate repo)
 
 Phases 2+ of `gards.md`, **connector workload first — as no-gard workers**
 (corrected 2026-08-14, `decision-log.md` § The provisioner's unit is a

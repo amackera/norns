@@ -174,7 +174,7 @@ Port exposure via tunnel:
 
 Code extraction when done:
   - git push from inside container (preferred)
-  - norns-provision export gard_abc123 ./local-dir
+  - volund export gard_abc123 ./local-dir
   - or just keep the container alive for inspection
 ```
 
@@ -831,21 +831,21 @@ When both Norns and the worker are in Docker containers on macOS, the worker's `
 
 ```bash
 # P0 — connector deployment (no gard): build or pull, inject secrets, supervise
-$ norns-provision up slack --build ./my-slack-worker --env-file .env
-$ norns-provision up slack --image ghcr.io/nornscode/slack-connector --env-file .env
-$ norns-provision list          # joins container state with worker-connected state
-$ norns-provision logs slack
-$ norns-provision restart slack
-$ norns-provision down slack
+$ volund up slack --build ./my-slack-worker --env-file .env
+$ volund up slack --image ghcr.io/nornscode/slack-connector --env-file .env
+$ volund list          # joins container state with worker-connected state
+$ volund logs slack
+$ volund restart slack
+$ volund down slack
 
 # P1 — coding-agent deployment (gard): provisioner creates the gard,
 # injects GARD_ID + CLAIM_TOKEN, copies the workspace in
-$ norns-provision up feature-x --gard --build ./coding-worker \
+$ volund up feature-x --gard --build ./coding-worker \
     --workspace ~/projects/my-app --env-file .env
 
 # Extract code when done
-$ norns-provision export feature-x --to ~/projects/my-app
-$ norns-provision git-push feature-x --remote origin --branch agent/feature-x
+$ volund export feature-x --to ~/projects/my-app
+$ volund git-push feature-x --remote origin --branch agent/feature-x
 ```
 
 ---
@@ -897,7 +897,7 @@ If snapshots are paired with conversation checkpoints, the `checkpoint_saved` ev
 
 **Backwards compatibility:** Runs without a gard work exactly as today. Workers without a gard work exactly as today. No-gard runs only dispatch to no-gard workers; gard runs only dispatch to matching-gard workers. Zero breaking changes. Existing deployments require no migration beyond the schema addition — gards are fully opt-in.
 
-### Phase 2: Provisioner (Separate Repo — `norns-provision`)
+### Phase 2: Provisioner (Separate Repo — `volund`)
 
 **First target: the connector workload — as no-gard workers (see the
 Correction at the top).** A connector (Slack, Discord) needs none of the
@@ -911,7 +911,7 @@ injection (responsibility 3) covers the token.
 Shape: a thin, stateless Go CLI mirroring nornsctl's layout. Docker's
 `--restart unless-stopped` *is* the supervisor — no daemon in the MVP.
 Secrets are read from `--env-file` at `up` and baked into container env;
-the state file (`~/.norns-provision/state.json`) remembers the env-file
+the state file (`~/.volund/state.json`) remembers the env-file
 *path*, never values, and nothing secret is ever sent to Norns. A driver
 interface (`docker` now; `fly`/`firecracker` later) keeps the managed
 service (a control plane driving the same interface) a Phase-3+ product,
