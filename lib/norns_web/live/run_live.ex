@@ -80,9 +80,7 @@ defmodule NornsWeb.RunLive do
     <%= if @run.output do %>
       <div class="mb-6">
         <h2 class="text-sm font-bold text-gray-600 dark:text-gray-400 mb-2">Output</h2>
-        <div class="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded p-4 text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-          <%= @run.output %>
-        </div>
+        <div class="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded p-4 text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap"><%= @run.output %></div>
       </div>
     <% end %>
 
