@@ -77,8 +77,12 @@ defmodule Norns.Workers.WorkerRegistryGardTest do
     end
   end
 
-  describe "LLM dispatch is not gard-filtered" do
-    test "an LLM task reaches a gard-bound LLM worker" do
+  describe "LLM dispatch gard strictness" do
+    # LLM calls are stateless but the worker's LLM credentials are not: a
+    # gard deployment's API key must not silently serve other runs, and a
+    # lone gard worker half-serving a plain run (LLM works, tools hang) is
+    # worse than queueing the run whole.
+    test "a no-gard LLM task never reaches a gard-bound worker (it queues)" do
       tid = tenant_id()
 
       :ok =
@@ -87,9 +91,52 @@ defmodule Norns.Workers.WorkerRegistryGardTest do
           gard: 42
         )
 
-      {:ok, task_id} = WorkerRegistry.dispatch_llm_task(tid, %{model: "m"}, from_pid: self())
+      {:ok, _} = WorkerRegistry.dispatch_llm_task(tid, %{model: "m"}, from_pid: self())
+      refute_receive {:llm_task, _}, 100
+
+      WorkerRegistry.unregister_worker(tid, "garded-llm")
+    end
+
+    test "a gard-bound LLM task reaches only its gard's worker" do
+      tid = tenant_id()
+
+      :ok = WorkerRegistry.register_worker(tid, "plain-llm", self(), [], capabilities: [:llm])
+
+      {:ok, _} = WorkerRegistry.dispatch_llm_task(tid, %{model: "m"}, from_pid: self(), gard: 42)
+      refute_receive {:llm_task, _}, 100
+
+      :ok =
+        WorkerRegistry.register_worker(tid, "garded-llm", self(), [],
+          capabilities: [:llm],
+          gard: 42
+        )
+
+      {:ok, task_id} = WorkerRegistry.dispatch_llm_task(tid, %{model: "m"}, from_pid: self(), gard: 42)
       assert_receive {:llm_task, %{task_id: ^task_id}}, 500
 
+      WorkerRegistry.unregister_worker(tid, "plain-llm")
+      WorkerRegistry.unregister_worker(tid, "garded-llm")
+    end
+
+    test "a queued gard LLM task flushes only to a matching-gard worker" do
+      # No-gard LLM tasks can't be part of this scenario: the global
+      # :default-tenant test worker absorbs them before they ever queue.
+      tid = tenant_id()
+
+      {:ok, gard_task} = WorkerRegistry.dispatch_llm_task(tid, %{model: "m"}, from_pid: self(), gard: 42)
+
+      :ok = WorkerRegistry.register_worker(tid, "plain-llm", self(), [], capabilities: [:llm])
+      refute_receive {:llm_task, _}, 100
+
+      :ok =
+        WorkerRegistry.register_worker(tid, "garded-llm", self(), [],
+          capabilities: [:llm],
+          gard: 42
+        )
+
+      assert_receive {:llm_task, %{task_id: ^gard_task}}, 500
+
+      WorkerRegistry.unregister_worker(tid, "plain-llm")
       WorkerRegistry.unregister_worker(tid, "garded-llm")
     end
   end

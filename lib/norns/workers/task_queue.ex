@@ -23,8 +23,9 @@ defmodule Norns.Workers.TaskQueue do
 
   Pass `gard:` to match strictly on the task's gard (nil matches only
   no-gard tasks) — a queued gard-bound task must never flush to a worker in
-  a different gard. Without the option, gard is ignored (LLM tasks have no
-  filesystem affinity).
+  a different gard. Tool and LLM tasks both carry the run's gard: tools for
+  filesystem affinity, LLM so a gard deployment's credentials never serve
+  other runs. Without the option, gard is ignored.
   """
   def flush(tenant_id, tool_name, opts \\ []) do
     GenServer.call(__MODULE__, {:flush, tenant_id, tool_name, opts})

@@ -152,10 +152,13 @@ operational layer on top.
 - **P2:** the managed product — control plane over the same driver
   interface, prebuilt connector images, tunnels, snapshots, billing.
 
-Two prerequisites in existing repos, both small: **`GET /api/v1/workers`**
-(`WorkerRegistry.connected_workers/1` exists; `list` needs it over REST to
-tell healthy from crash-looping) and the **Python SDK serial-task fix**
-(ship as 0.3.1 — 24/7 connectors are the workload it bites).
+Two prerequisites in existing repos, both small — **both shipped
+2026-08-15**: `GET /api/v1/workers` (live) and the Python SDK serial-task
+fix (released as 0.3.1; 0.3.2 added `NORNS_GARD`/`NORNS_GARD_CLAIM_TOKEN`
+env fallbacks for P1 gard deployments). Volund P0 shipped against them the
+same day; P1 (gard deployments, workspace copy-in/export, port mapping)
+landed 2026-08-16, which also forced LLM dispatch to become gard-strict —
+see the decision log.
 
 This is the "own the provisioner" commitment — managed deployments as the
 home for the tenant's capability layer and, later, builder output.
@@ -172,10 +175,9 @@ home for the tenant's capability layer and, later, builder output.
 - **Blog post** — sub-agent recovery write-up: published as
   ["Is This Still Happening?"](https://mackeracher.com/posts/is-this-still-happening/)
   (2026-08-08).
-- **Cross-SDK parity gaps** — Python serial task handling (a real concurrency
-  bug under load; now a named provisioner prerequisite — ship as SDK 0.3.1),
-  per-request LLM keys, model-string separator, graceful shutdown. Small and
-  independently shippable — and the first two stop being optional once
+- **Cross-SDK parity gaps** — Python serial task handling shipped as SDK
+  0.3.1; still open: per-request LLM keys, model-string separator, graceful
+  shutdown. Small and independently shippable — and no longer optional once
   connectors run 24/7 under the provisioner (see Cloud readiness).
 - **Template hygiene** — drop the `litellm!=1.96.1` uv constraint from the
   scaffold templates; SDK 0.3.0 carries the exclusion itself.

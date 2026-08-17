@@ -64,10 +64,18 @@ defmodule Norns.Workers.WorkerRegistry do
     GenServer.call(__MODULE__, {:connected_workers, tenant_id})
   end
 
-  @doc "Dispatch an LLM task to a worker with LLM capability."
+  @doc """
+  Dispatch an LLM task to a worker with LLM capability.
+
+  Gard-strict like tool dispatch: LLM calls are stateless, but the
+  worker's LLM credentials are not — a gard deployment's API key must
+  not silently serve other runs, and a lone gard worker half-serving a
+  plain run (LLM works, tools hang) is worse than queueing it whole.
+  """
   def dispatch_llm_task(tenant_id, task, opts \\ []) do
     from_pid = Keyword.get(opts, :from_pid, self())
-    GenServer.call(__MODULE__, {:dispatch_llm, tenant_id, task, from_pid})
+    gard = Keyword.get(opts, :gard)
+    GenServer.call(__MODULE__, {:dispatch_llm, tenant_id, task, from_pid, gard})
   end
 
   @doc "Dispatch a tool task to a connected worker."
@@ -145,7 +153,7 @@ defmodule Norns.Workers.WorkerRegistry do
     state =
       if :llm in capabilities do
         tenant_id
-        |> TaskQueue.flush("__llm__")
+        |> TaskQueue.flush("__llm__", gard: gard)
         |> Enum.reduce(state, fn task, pending_state ->
           push_to_worker(channel_pid, {:llm_task, llm_task_payload(task)})
           put_in(pending_state.pending[task.task_id], %{from_pid: task.from_pid, tenant_id: tenant_id, type: :llm, worker_key: key})
@@ -200,8 +208,11 @@ defmodule Norns.Workers.WorkerRegistry do
     {:reply, available, state}
   end
 
-  def handle_call({:dispatch_llm, tenant_id, task, from_pid}, _from, state) do
-    worker = find_worker(state, tenant_id, fn w -> :llm in w.capabilities and Process.alive?(w.channel_pid) end)
+  def handle_call({:dispatch_llm, tenant_id, task, from_pid, gard}, _from, state) do
+    worker =
+      find_worker(state, tenant_id, fn w ->
+        :llm in w.capabilities and w.gard == gard and Process.alive?(w.channel_pid)
+      end)
 
     case worker do
       {key, w} ->
@@ -223,7 +234,8 @@ defmodule Norns.Workers.WorkerRegistry do
           task_id: task_id,
           tool_name: "__llm__",
           input: task,
-          from_pid: from_pid
+          from_pid: from_pid,
+          gard: gard
         })
 
         {:reply, {:ok, task_id}, state}

@@ -60,6 +60,7 @@
     --font-weight-medium: 500;
     --font-weight-bold: 700;
     --tracking-tight: -0.025em;
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
     --default-transition-duration: 150ms;
     --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     --default-font-family: var(--font-sans);
@@ -641,6 +642,9 @@
   }
   .text-yellow-700 {
     color: var(--color-yellow-700);
+  }
+  .lowercase {
+    text-transform: lowercase;
   }
   .placeholder-gray-400 {
     &::placeholder {

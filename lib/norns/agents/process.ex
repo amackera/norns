@@ -281,7 +281,11 @@ defmodule Norns.Agents.Process do
         step: state.step
       }
 
-      {:ok, task_id} = WorkerRegistry.dispatch_llm_task(state.tenant_id, llm_task, from_pid: self())
+      {:ok, task_id} =
+        WorkerRegistry.dispatch_llm_task(state.tenant_id, llm_task,
+          from_pid: self(),
+          gard: state.gard_id
+        )
 
       timer = Process.send_after(self(), {:task_timeout, task_id}, @task_timeout_ms)
       {:noreply, %{state | status: :awaiting_llm, pending_llm_task: task_id, task_timer: timer}}
