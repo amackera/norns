@@ -45,7 +45,15 @@ defmodule Norns.Agents.ProcessGardTest do
   end
 
   test "a gard-bound run sees and uses only its gard's tools", %{tenant: tenant, agent: agent, gard: gard} do
-    start_worker(tenant, worker_id: "gard-worker", gard: gard.id, tools: [tool("read_file", "gard file contents")])
+    # Gard workers are LLM-capable, like a real gard deployment: LLM
+    # dispatch is gard-strict, so the gard's own worker serves its runs.
+    start_worker(tenant,
+      worker_id: "gard-worker",
+      gard: gard.id,
+      capabilities: [:llm, :tools],
+      tools: [tool("read_file", "gard file contents")]
+    )
+
     start_worker(tenant, worker_id: "plain-worker", tools: [tool("plain_tool", "plain result")])
 
     Fake.set_responses([
@@ -96,7 +104,12 @@ defmodule Norns.Agents.ProcessGardTest do
   end
 
   test "a resumed run keeps its gard affinity", %{tenant: tenant, agent: agent, gard: gard} do
-    start_worker(tenant, worker_id: "gard-worker", gard: gard.id, tools: [tool("read_file", "x")])
+    start_worker(tenant,
+      worker_id: "gard-worker",
+      gard: gard.id,
+      capabilities: [:llm, :tools],
+      tools: [tool("read_file", "x")]
+    )
 
     {:ok, run} =
       Runs.create_run(%{
@@ -134,6 +147,10 @@ defmodule Norns.Agents.ProcessGardTest do
 
   test "a child launched from a gard-bound run inherits the gard", %{tenant: tenant, agent: agent, gard: gard} do
     child_agent = create_agent(tenant, %{name: "child-#{System.unique_integer([:positive])}"})
+
+    # Parent and child are both gard-bound, so both need the gard's
+    # worker for LLM — the no-gard default worker no longer serves them.
+    start_worker(tenant, worker_id: "gard-worker", gard: gard.id, capabilities: [:llm, :tools])
 
     Fake.set_responses([
       # Parent launches the child
