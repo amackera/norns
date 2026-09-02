@@ -1,7 +1,7 @@
 # Norns Roadmap
 
-**Status:** v4
-**Last updated:** 2026-08-14
+**Status:** v5
+**Last updated:** 2026-09-01
 
 Sequencing for the next phase of work. For what's already built and why, see
 `decision-log.md`. For the product direction this sequence serves, see
@@ -15,8 +15,9 @@ The core is shipping: durable agent process, orchestrator/worker split,
 provider-neutral LLM format, conversations, REST API + dashboard, multi-agent
 orchestration, and both SDKs published (Python on PyPI at 0.3.0 with gard
 support, Elixir on Hex). Norns itself is at **v0.5** ("agents are
-configuration"), and steps 1–5 below are all shipped — the sequence now
-points at exactly one thing: the provisioner.
+configuration"). Steps 1–5 below are shipped, and the provisioner (step 6)
+has its P0 and P1 landed — the sequence now adds one primitive on top of
+that foundation: chains (step 7).
 
 The v1 roadmap's "Now" tier is **done**: subagent allowlists shipped
 (`SubagentPolicy`), human-in-the-loop is fully wired (`ask_human` /
@@ -60,8 +61,9 @@ flowchart TB
     C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — shipped 2026-08-10"]
     D["4 — Fabricate toolkit ✓<br/>templates · scaffold AGENTS.md · --wait — shipped 2026-08-11"]
     E["5 — Inbound webhooks ✓<br/>POST /api/v1/hooks/:token · signatures — shipped 2026-08-13"]
-    F["6 — Provisioner (volund)<br/>separate repo · no-gard connectors first, then coding-agent gards"]
-    A --> B --> C --> D --> E --> F
+    F["6 — Provisioner (volund) ◐<br/>separate repo · P0 + P1 shipped 2026-08-16 · P2 managed product open"]
+    G["7 — Chains<br/>ordered agent defs as tenant data · transactional advance · plan-chains.md"]
+    A --> B --> C --> D --> E --> F --> G
 ```
 
 ### 1. Per-agent tool selection — done (2026-08-10)
@@ -163,6 +165,43 @@ see the decision log.
 This is the "own the provisioner" commitment — managed deployments as the
 home for the tenant's capability layer and, later, builder output.
 
+### 7. Chains (`plan-chains.md`)
+
+An ordered list of agent defs that run one after another, each step's
+output becoming the next step's message. Tenant data like a trigger — no
+repo, no coordinator prompt, no LLM deciding what runs next. Prompted by
+Runner's "break a process into steps, chain agents with the right tools for
+each, one agent per customer" — every claim on that page except the
+learning loop is a composition of shipped primitives, and the chain is the
+one piece missing.
+
+Why it sits here and not under "Alongside": it is the first primitive whose
+value is *per case* rather than per agent, which is the shape a fleet has.
+And it is what compose mode emits when the process has more than one step —
+the builder can insert a row where it could never safely rewrite a
+coordinator prompt.
+
+Shape: `chains` + `chain_runs` tables, step runs as ordinary top-level runs
+carrying `chain_run_id`, and the advance as an Oban job inserted in the
+same transaction that completes a step run. No new process type; the
+orchestrator stays pure. HITL and retry fall out of hooking completion —
+a step parked on `ask_human` parks the chain, a retried step run advances
+it from where it stopped. An optional chain-level gard lands the whole case
+on one deployment.
+
+- **P1:** tables, `Norns.Chains`, `{{input}}` / `{{output}}` templates,
+  transactional advance, REST CRUD + `POST /chains/:id/start`,
+  `nornsctl chains`. Acceptance: a three-step chain with `ask_human` in
+  step 2, node killed mid-step, reply, chain completes with exactly one run
+  per step.
+- **P2:** triggers and hooks can target a chain (one webhook per overdue
+  invoice is one chain run per customer).
+- **P3:** chain membership in `RunLive`, a `ChainRunLive`.
+
+Deliberately not a workflow engine — linear only. Branching and parallel
+steps stay with the parked `plan-custom-agent-workflows.md`; the playbook
+compiler and the learning loop stay with the cloud builder.
+
 ---
 
 ## Alongside, when convenient
@@ -208,6 +247,8 @@ itself into a corner on any of them (`decision-log.md` § Cloud readiness):
 Carried forward, deliberately unscheduled:
 
 - **Durable MCP + custom workflows** — parked by the fork decision above.
+  Chains (step 7) cover the linear case as data; anything with branching or
+  parallelism still needs this.
 - **A Norns MCP server** — redundant for CLI clients, insufficient for GUI
   clients; see `plan-agent-builder.md` § Not building.
 - **Agent-write tools for agents** (`create_agent` as a tool) — not until a
@@ -248,6 +289,7 @@ promise in-process behaviour that the multi-tenant product cannot deliver.
 - `decision-log.md` — what's built and why
 - `plan-agent-builder.md` — product direction: compose/fabricate, triggers, pruned alternatives
 - `gards.md` — worker affinity design (v9; Phase 1 shipped, provisioner phases + the no-gard-connectors correction)
+- `plan-chains.md` — ordered agent defs as tenant data (proposed)
 - `plan-subagent-allowlists.md` — agent authorization (Phase 1 shipped)
 - `plan-durable-mcp.md` — durable step protocol (parked)
 - `plan-custom-agent-workflows.md` — `@agent` + `ctx.*` durable primitives (parked)
