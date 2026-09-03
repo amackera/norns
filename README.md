@@ -35,11 +35,7 @@ That's it. You have a running Norns server and a connected agent worker. See the
 
 If you run agents locally, durability is a solved problem. Modern operating and file systems and solid state drives are very reliable. Your machine stays on, the process stays alive, and the conversation transcript is right there. Cloud infrastructure is a little different. It's ephemeral, temporary. Containers get evicted. VMs get preempted. Deploys ship new code and kill in-flight processes. An agent's environment can disappear at any moment, and there's no durable file system or long-lived process to fall back on.
 
-Your agent is 8 tool calls deep when the container gets evicted. Without something like Norns, you start over from the beginning. With Norns, the next worker picks up at call 9.
-
-Your payment tool times out and the agent retries. Without idempotency, you risk charging the customer twice. With Norns, the retry skips the completed charge — same idempotency key, same result.
-
-Your agent is halfway through a 20-step research task when a deploy ships. Without durable execution, in-flight runs die. With Norns, runs survive deploys and resume on the new version.
+Norns moves the agent's state out of the process and into a persistent event log. Every LLM response and tool result is recorded as it happens, so the run doesn't live in any one container. When a worker disappears, the next one replays the log and continues from the last completed step. Tools that already ran aren't run again.
 
 ## How it works
 
@@ -59,8 +55,6 @@ sequenceDiagram
 ```
 
 Workers connect via WebSocket, register their tools and capabilities, and hold all the API keys. If no worker is connected, tasks queue and resume when one reconnects. If a worker dies mid-task, the orchestrator notices and puts the task back in the queue.
-
-Each agent is a GenServer under a DynamicSupervisor — process isolation, crash recovery, and concurrency come from the BEAM. What Norns adds is the orchestration layer: event logs, checkpoints, idempotency, and error classification.
 
 Side-effecting tools get deterministic idempotency keys derived from the run ID, step number, and tool call ID. On replay, if a result already exists for that key, the tool is skipped. Not all errors are the same either — transient failures get retried with backoff, rate limits get patient retries, and validation errors are terminal.
 
