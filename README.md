@@ -14,9 +14,9 @@
 
 https://github.com/user-attachments/assets/b300b164-dc0c-44ea-a794-1de00b4f01a7
 
-<p align="center"><sub>An agent calls <code>wait</code> (10s) then <code>say_hello</code>. The worker is killed twice mid-run. Each time, a new worker connects and the run resumes from where it left off. No state lost, no duplicate execution.</sub></p>
+<p align="center"><sub>An agent calls <code>wait</code> (10s), then <code>say_hello</code>. I kill the worker twice mid-run. Each time a new worker connects, the run picks up where it left off. Nothing is lost and nothing runs twice.</sub></p>
 
-Norns is an open-source durable runtime for AI agents, built in Elixir on the BEAM. If a worker crashes mid-run, the next worker picks up where it left off. Every step is persisted to an event log. Completed tools don't re-execute. Norns never touches your API keys or data.
+Norns is a durable execution runtime for AI agents, built in Elixir on the BEAM. If the worker running an agent dies mid-run, the next worker replays the run's event log and continues from the last completed step. Tools that already ran don't run again.
 
 ## Get started
 
@@ -29,17 +29,17 @@ uv sync
 uv run my-agent-worker
 ```
 
-That's it. You have a running Norns server and a connected agent worker. See the [hello example](https://github.com/nornscode/norns-hello-agent) for a full walkthrough.
+That gives you a Norns server and a worker connected to it. The [hello agent](https://github.com/nornscode/norns-hello-agent) walks through the rest.
 
-## The problem
+## Why
 
-If you run agents locally, durability is a solved problem. Modern operating and file systems and solid state drives are very reliable. Your machine stays on, the process stays alive, and the conversation transcript is right there. Cloud infrastructure is a little different. It's ephemeral, temporary. Containers get evicted. VMs get preempted. Deploys ship new code and kill in-flight processes. An agent's environment can disappear at any moment, and there's no durable file system or long-lived process to fall back on.
+On your laptop, durability is mostly a solved problem. The process stays up, the disk is reliable, and the transcript is right there. In the cloud, none of that holds. Containers get evicted, VMs get preempted, and every deploy kills whatever was in flight. An agent eight tool calls into a job can lose its whole environment at any moment, with no long-lived process or file system to fall back on.
 
-Norns moves the agent's state out of the process and into a persistent event log. Every LLM response and tool result is recorded as it happens, so the run doesn't live in any one container. When a worker disappears, the next one replays the log and continues from the last completed step. Tools that already ran aren't run again.
+Norns moves the agent's state out of the process and into Postgres. Every LLM call, tool call, and tool result is an event in the run's log, so the run doesn't live in any one container. When a worker disappears, the next one replays the log and carries on.
 
 ## How it works
 
-The Norns orchestrator is a state machine. It doesn't call LLMs or execute tools. It manages state transitions and persists events. Workers do the actual work.
+The orchestrator is a state machine. It never calls an LLM and never runs a tool. It manages state transitions and persists events. Workers do the actual work.
 
 ```mermaid
 sequenceDiagram
@@ -54,9 +54,15 @@ sequenceDiagram
     Note over O,W: checkpoint, repeat
 ```
 
-Workers connect via WebSocket, register their tools and capabilities, and hold all the API keys. If no worker is connected, tasks queue and resume when one reconnects. If a worker dies mid-task, the orchestrator notices and puts the task back in the queue.
+Workers connect over WebSocket, register their tools, and hold the API keys. If no worker is connected, tasks queue until one shows up. If a worker dies mid-task, the orchestrator notices and puts the task back in the queue.
 
-Side-effecting tools get deterministic idempotency keys derived from the run ID, step number, and tool call ID. On replay, if a result already exists for that key, the tool is skipped. Not all errors are the same either — transient failures get retried with backoff, rate limits get patient retries, and validation errors are terminal.
+Side-effecting tools get a deterministic idempotency key derived from the run ID, step number, and tool call ID. On replay, if a result already exists for that key, the tool is skipped. That's what keeps a resumed run from sending the same email twice.
+
+Errors get classified, because retrying everything is as wrong as retrying nothing:
+
+- Transient failures (timeouts, worker disconnects, upstream outages) get a few retries with exponential backoff.
+- Rate limits get patient retries with linear backoff. The dependency is fine, you just have to wait.
+- Validation and policy errors are terminal. Retrying won't fix a bad input.
 
 ## SDKs and examples
 
@@ -70,7 +76,6 @@ Side-effecting tools get deterministic idempotency keys derived from the run ID,
 
 ```python
 from norns import Norns, Agent, tool
-import os
 
 @tool
 def search_docs(query: str) -> str:
@@ -99,11 +104,13 @@ print(result.output)
 
 ## Where this is going
 
-The direction is an agent builder: describe an agent, get a running durable one. The model that makes that possible: **tools are infrastructure, agents are configuration.** Workers form a tenant's long-lived capability layer (the Slack worker, the DB worker); agents are cheap data — prompt, model, tool selection, triggers — composed on top through the API without deploying anything. The primitives that story needs shipped in v0.5: per-agent tool selection, cron triggers, inbound webhooks with signature verification, worker affinity ([gards](docs/gards.md)), and project templates. Next up is the provisioner — a separate tool that keeps workers running (supervised containers, injected secrets), starting with connectors. Everything in this repo stays open source; the builder itself and managed hosting are planned as a hosted product on top of these primitives. See [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
+The goal is an agent builder: describe an agent, get a running durable one. The idea underneath is that tools are infrastructure and agents are configuration. Workers are the long-lived part (the Slack worker, the database worker). Agents are data on top of them: a prompt, a model, a tool selection, some triggers. You create one through the API without deploying anything.
+
+v0.5 shipped the primitives that story needs: per-agent tool selection, cron triggers, inbound webhooks with signature verification, worker affinity ([gards](docs/gards.md)), and project templates. I'm now building a provisioner that keeps workers running, starting with managed connectors. The provisioner, the builder, and hosting will be a product on top of Norns. Everything in this repo stays MIT. Details are in [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
 
 ## Status
 
-Norns is v0.x. The runtime, SDKs, and CLI work and are in active development. APIs are stabilizing; breaking changes will be noted in releases. Pin versions if you're using this in production.
+Norns is v0.x. I run [Mimir](https://github.com/nornscode/norns-mimir-agent) on it in production and it holds up, but the APIs are still moving. Breaking changes get called out in release notes, so pin versions. Hit a bug or some jank? [Open an issue](https://github.com/nornscode/norns/issues).
 
 ## License
 
