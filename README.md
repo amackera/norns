@@ -104,9 +104,9 @@ print(result.output)
 
 ## Where this is going
 
-The goal is an agent builder: describe an agent, get a running durable one. The idea underneath is that tools are infrastructure and agents are configuration. Workers are the long-lived part (the Slack worker, the database worker). Agents are data on top of them: a prompt, a model, a tool selection, some triggers. You create one through the API without deploying anything.
+Right now, making a new agent means writing a worker and deploying it. I want to get to the point where most agents don't need that. Workers like a Slack worker or a database worker are the parts that actually need to be deployed and kept running. Once they exist, an agent is just a row in the database: a prompt, a model, which tools it can call, and when it runs. You'd create one with an API call and it would start running against the workers already connected.
 
-v0.5 shipped the primitives that story needs: per-agent tool selection, cron triggers, inbound webhooks with signature verification, worker affinity ([gards](docs/gards.md)), and project templates. I'm now building a provisioner that keeps workers running, starting with managed connectors. The provisioner, the builder, and hosting will be a product on top of Norns. Everything in this repo stays MIT. Details are in [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
+v0.5 got most of the pieces in place. Agents pick their own tools, cron triggers and inbound webhooks start runs, [gards](docs/gards.md) pin an agent to a particular worker, and `nornsctl new` scaffolds a project. The missing piece is something to keep the workers themselves running, so that's what I'm working on next. The longer version is in [docs/roadmap.md](docs/roadmap.md) and [docs/plan-agent-builder.md](docs/plan-agent-builder.md).
 
 ## Status
 
