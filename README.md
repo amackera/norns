@@ -44,17 +44,19 @@ The orchestrator is a state machine. It never calls an LLM and never runs a tool
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant W as Worker (your code)
-    O->>W: llm_task
-    Note right of W: calls Claude/GPT/etc
-    W-->>O: response
-    O->>W: tool_task
-    Note right of W: runs your function
-    W-->>O: result
-    Note over O,W: checkpoint, repeat
+    participant A as Worker A<br/>llm, search_docs
+    participant B as Worker B<br/>post_to_slack
+    O->>A: llm_task
+    Note right of A: calls Claude/GPT/etc
+    A-->>O: response with tool calls
+    O->>A: tool_task: search_docs
+    A-->>O: result
+    O->>B: tool_task: post_to_slack
+    B-->>O: result
+    Note over O,B: checkpoint, repeat
 ```
 
-Workers connect over WebSocket, register their tools, and hold the API keys. If no worker is connected, tasks queue until one shows up. If a worker dies mid-task, the orchestrator notices and puts the task back in the queue.
+Workers connect over WebSocket, register their tools, and hold the API keys. There's usually more than one. Each worker brings its own set of tools (a Slack worker, a database worker, one that wraps your internal API), and the agent sees the union of everything connected. The orchestrator routes each tool call to a worker that registered that tool. If no worker is connected, tasks queue until one shows up. If a worker dies mid-task, the orchestrator notices and puts the task back in the queue.
 
 Side-effecting tools get a deterministic idempotency key derived from the run ID, step number, and tool call ID. On replay, if a result already exists for that key, the tool is skipped. That's what keeps a resumed run from sending the same email twice.
 
