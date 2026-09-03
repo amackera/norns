@@ -1,6 +1,6 @@
 # Plan: Chains
 
-**Status:** Proposed (2026-09-01)
+**Status:** Proposed (2026-09-01; `launch_chain` added 2026-09-03)
 **Depends on:** per-agent tool selection (shipped), cron triggers (shipped), inbound webhooks (shipped), gards Phase 1 (shipped)
 **Relates to:** `plan-agent-builder.md` (compose mode), `plan-custom-agent-workflows.md` (parked)
 
@@ -67,9 +67,11 @@ runs
 
 - `chain_runs.steps` is a **snapshot**. Editing a chain while cases are in
   flight must not change what those cases do; new starts pick up the edit.
-- Step runs are ordinary top-level runs with `trigger_type: "chain"`,
-  `depth: 0`, and no `parent_run_id`. Sub-agents launched inside a step
-  count depth from the step, as they do today.
+- Step runs are ordinary runs with `trigger_type: "chain"`. Started from
+  the API, a trigger, or a hook they are top-level: `depth: 0`, no
+  `parent_run_id`. Started via `launch_chain` they inherit the parent's
+  depth and gard (see below). Sub-agents launched inside a step count depth
+  from the step, as they do today.
 - `message` on a step is a template. v1 supports two variables:
   `{{input}}` (the chain's original message) and `{{output}}` (the previous
   step's `run.output`). Default `"{{output}}"`; step 0 defaults to
@@ -167,6 +169,62 @@ is its own BEAM process tree.
 
 ---
 
+## Chains as sub-agents: `launch_chain`
+
+Agents should be able to launch a chain the way they launch a sub-agent.
+The chain is authorised as a unit — the tenant vetted the composition when
+it wrote the row — so a parent needs the chain on its allowlist, not every
+step agent.
+
+**Who configures chains** is the other half of this question, and the
+answer is nobody from inside a run. Writing a chain definition is
+agent-write, the same category as `create_agent`-as-a-tool, parked in
+`roadmap.md` § Not now until a capability model exists. The builder writes
+chains, but as the cloud product holding a tenant key and calling the REST
+API from its worker — compose mode, not a built-in.
+
+### Launching a stored chain (P2)
+
+A `launch_chain` built-in (or `launch_agent` accepting a chain name —
+decide at implementation; one tool with a `chain` argument is simpler for
+the LLM) starts a chain run with the parent's run as `parent_run_id`. The
+parent parks in `:awaiting_tools` exactly as for a sub-agent, and the
+chain's final output returns as the tool result.
+
+- **Policy.** `SubagentPolicy.allowed_agents` gains chain names alongside
+  agent names (`allowed_chains`, or one list with a `chain:` prefix). Audit
+  events mirror the existing four: `chain_launch_allowed` / `_denied`.
+- **Depth and gard.** Step runs inherit the parent's `depth + 1` and the
+  parent's `gard_id`, as `launch_agent` does today, so `max_depth` bounds
+  the chain and the whole case still lands on one deployment.
+- **Recovery.** The tool block stores `child_chain_run_id` the way it
+  stores `child_run_id`. On resume the parent reattaches to the chain run
+  by id and reads its status — the sub-agent recovery fix applied to a
+  chain run.
+- **Completion signal.** The parent waits on a chain run id, not a run id.
+  The advancer broadcasts chain completion and failure on a topic the
+  parent subscribes to (`chain_run:<id>`), carrying `output` or the
+  failing step's `failure_metadata`.
+- **`chain_runs` gains** `parent_run_id` (nullable) so lineage is
+  inspectable from either side.
+
+### Ad hoc chains (later, opt-in)
+
+`launch_chain(steps: ["find-contact", "send-notice", "reconcile"])` with no
+stored chain. The snapshot design makes it nearly free: a chain run with
+`chain_id: nil` whose steps are written at start. It is "run these agents
+in sequence with no LLM turn between them", which beats N `launch_agent`
+calls on tokens and on reliability of the sequence.
+
+The policy is stricter, because nobody vetted this composition: **every
+step agent must be individually allowlisted** by the parent's
+`SubagentPolicy`. Keep it out of P1 and P2. The stable process is the
+stored chain; an ad hoc one hands the sequence back to the LLM, which is
+the thing chains exist to avoid. Add it when a real agent wants it and the
+stored form has proven itself.
+
+---
+
 ## What this is not
 
 - **Not a workflow engine.** No branching, no parallel steps, no loops. A
@@ -194,8 +252,11 @@ is its own BEAM process tree.
    mid-step-2; reply; assert the chain completes with step 3's output and
    exactly one run per step.
 2. **Ingress:** triggers and hooks can target a chain; `trigger_type` on the
-   chain run records `schedule` / `webhook` / `api`.
+   chain run records `schedule` / `webhook` / `api`. **`launch_chain`** for
+   stored chains: policy, depth/gard inheritance, reattach, completion
+   broadcast (`trigger_type: "subagent"`).
 3. **Observability:** `ChainRunLive`; chain membership in `RunLive`.
+4. **Ad hoc chains**, opt-in, only when a real agent needs one.
 
 ---
 
@@ -213,4 +274,6 @@ is its own BEAM process tree.
   prompt to summarise, are both possible; don't decide yet.
 - **Sub-agent policy across steps.** A step's `SubagentPolicy` is unchanged.
   Should a chain be allowed to be a step of another chain? Not in v1 — a
-  step is an agent def, full stop.
+  step is an agent def, full stop. A step *agent* may `launch_chain` once
+  P2 lands, which gives nesting through the policy model rather than the
+  data model.
