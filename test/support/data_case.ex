@@ -30,7 +30,7 @@ defmodule Norns.DataCase do
     {:ok, tenant} =
       Norns.Tenants.create_tenant(
         Map.merge(
-          %{name: "Test Tenant", slug: "test-#{System.unique_integer([:positive])}", api_keys: %{"anthropic" => "test-key"}},
+          %{name: "Test Tenant", slug: "test-#{System.unique_integer([:positive])}", api_keys: %{"norns" => "test-key"}},
           attrs
         )
       )

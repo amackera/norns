@@ -84,13 +84,11 @@ defmodule Norns.Runtime.EventTimelineTest do
     end
 
     test "failed run has failure metadata and inspector-compatible events", %{} do
-      tenant = create_tenant(%{api_keys: %{"anthropic" => ""}})
+      tenant = create_tenant()
       agent = create_agent(tenant, %{model_config: %{"on_failure" => "stop"}})
 
-      # Empty API key will cause LLM error
+      # No queued responses forces an error from the fake
       Fake.set_responses([])
-      # Override to force an error from the fake
-      Norns.LLM.Fake.set_responses([])
 
       Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent.id}")
       {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)

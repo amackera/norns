@@ -8,7 +8,7 @@ defmodule Norns.Agents.Process do
 
   require Logger
 
-  alias Norns.{Agents, Conversations, Runs, Tenants}
+  alias Norns.{Agents, Conversations, Runs}
   alias Norns.Agents.{AgentDef, SubagentPolicy, ToolPolicy}
   alias Norns.Runtime.{ErrorPolicy, Errors, Events}
   alias Norns.Workers.WorkerRegistry
@@ -67,8 +67,6 @@ defmodule Norns.Agents.Process do
     resume_run_id = Keyword.get(opts, :resume_run_id)
 
     agent = Agents.get_agent!(agent_id)
-    tenant = Tenants.get_tenant!(tenant_id)
-    api_key = tenant.api_keys["anthropic"] || ""
 
     explicit_tools = Keyword.get(opts, :tools, [])
     max_steps_override = Keyword.get(opts, :max_steps)
@@ -89,7 +87,6 @@ defmodule Norns.Agents.Process do
       tenant_id: tenant_id,
       conversation_key: conversation_key,
       agent: agent,
-      api_key: api_key,
       agent_def: agent_def,
       explicit_tools: explicit_tools,
       max_steps_override: max_steps_override,
@@ -271,7 +268,6 @@ defmodule Norns.Agents.Process do
 
       # Dispatch LLM call to worker — non-blocking, neutral format
       llm_task = %{
-        api_key: state.api_key,
         model: state.agent_def.model,
         system_prompt: system_prompt,
         messages: messages_for_llm,

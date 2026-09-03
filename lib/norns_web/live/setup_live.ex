@@ -14,7 +14,6 @@ defmodule NornsWeb.SetupLive do
          current_tenant: nil,
          step: :form,
          name: "",
-         anthropic_key: "",
          created_tenant: nil,
          api_key: nil,
          error: nil
@@ -45,13 +44,6 @@ defmodule NornsWeb.SetupLive do
               <input type="text" name="name" value={@name} required
                 placeholder="My Organization"
                 class="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-gray-500" />
-            </div>
-            <div>
-              <label class="text-xs text-gray-600 dark:text-gray-400 block mb-1">Anthropic API key <span class="text-gray-400 dark:text-gray-600">(optional)</span></label>
-              <input type="text" name="anthropic_key" value={@anthropic_key}
-                placeholder="sk-ant-..."
-                class="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-gray-500" />
-              <p class="text-xs text-gray-500 dark:text-gray-600 mt-1">Used for LLM calls. Can be added later.</p>
             </div>
             <button type="submit"
               class="w-full bg-gray-900 dark:bg-white text-white dark:text-gray-950 font-medium text-sm py-2 rounded hover:bg-gray-800 dark:hover:bg-gray-200">
@@ -93,7 +85,7 @@ defmodule NornsWeb.SetupLive do
   end
 
   @impl true
-  def handle_event("create_tenant", %{"name" => name} = params, socket) do
+  def handle_event("create_tenant", %{"name" => name}, socket) do
     name = String.trim(name)
 
     if name == "" do
@@ -101,15 +93,8 @@ defmodule NornsWeb.SetupLive do
     else
       slug = __MODULE__.Slug.slugify(name)
       api_key = Tenants.generate_api_key()
-      anthropic_key = String.trim(params["anthropic_key"] || "")
 
-      api_keys =
-        %{"norns" => api_key}
-        |> then(fn keys ->
-          if anthropic_key != "", do: Map.put(keys, "anthropic", anthropic_key), else: keys
-        end)
-
-      case Tenants.create_tenant(%{name: name, slug: slug, api_keys: api_keys}) do
+      case Tenants.create_tenant(%{name: name, slug: slug, api_keys: %{"norns" => api_key}}) do
         {:ok, tenant} ->
           {:noreply, assign(socket, step: :done, created_tenant: tenant, api_key: api_key, error: nil)}
 

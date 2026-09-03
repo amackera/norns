@@ -16,7 +16,7 @@ https://github.com/user-attachments/assets/b300b164-dc0c-44ea-a794-1de00b4f01a7
 
 <p align="center"><sub>An agent calls <code>wait</code> (10s), then <code>say_hello</code>. I kill the worker twice mid-run. Each time a new worker connects, the run picks up where it left off. Nothing is lost and nothing runs twice.</sub></p>
 
-Norns is a durable execution runtime for AI agents, built in Elixir on the BEAM. If the worker running an agent dies mid-run, the next worker replays the run's event log and continues from the last completed step. Tools that already ran don't run again.
+Norns is a durable execution runtime for AI agents, built in Elixir on the BEAM. If the worker running an agent dies mid-run, the next worker replays the run's event log and continues from the last completed step. Tools that already ran don't run again. Norns never sees your API keys.
 
 ## Get started
 

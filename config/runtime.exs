@@ -1,7 +1,5 @@
 import Config
 
-config :norns, :default_anthropic_api_key, System.get_env("ANTHROPIC_API_KEY")
-
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

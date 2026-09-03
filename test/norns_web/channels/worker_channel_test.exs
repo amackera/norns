@@ -37,7 +37,6 @@ defmodule NornsWeb.WorkerChannelTest do
 
       {:ok, task_id} =
         WorkerRegistry.dispatch_llm_task(tenant.id, %{
-          api_key: "test-key",
           model: "claude-sonnet-4-20250514",
           system_prompt: "You are helpful.",
           messages: [%{role: "user", content: "hello"}],
@@ -115,7 +114,6 @@ defmodule NornsWeb.WorkerChannelTest do
 
       {:ok, task_id} =
         WorkerRegistry.dispatch_llm_task(tenant.id, %{
-          api_key: "test-key",
           model: "claude-sonnet-4-20250514",
           system_prompt: "You are helpful.",
           messages: [%{role: "user", content: "hello"}],

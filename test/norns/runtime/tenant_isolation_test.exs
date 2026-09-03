@@ -7,22 +7,19 @@ defmodule Norns.Runtime.TenantIsolationTest do
   alias Norns.Workers.WorkerRegistry
 
   describe "secret path validation" do
-    test "orchestrator does not hold provider API keys in agent state when worker handles LLM" do
-      tenant = create_tenant(%{api_keys: %{"norns" => "nrn_test123"}})
+    test "orchestrator never holds a provider API key in agent state" do
+      tenant = create_tenant(%{api_keys: %{"norns" => "nrn_test123", "anthropic" => "sk-should-be-ignored"}})
       agent = create_agent(tenant)
 
-      # The tenant has NO anthropic key — only a norns key
-      # The agent should still start (the DefaultWorker has its own key)
       {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
 
       state = AgentProcess.get_state(pid)
-      # The api_key in state comes from tenant.api_keys["anthropic"] which is nil
-      # This is correct — in worker mode, the worker holds the real key
       assert state.status == :idle
+      refute Map.has_key?(state, :api_key)
     end
 
-    test "LLM tasks dispatched to default worker include api_key from tenant" do
-      tenant = create_tenant(%{api_keys: %{"anthropic" => "sk-test-key"}})
+    test "LLM tasks never carry a provider API key; the worker supplies its own" do
+      tenant = create_tenant(%{api_keys: %{"norns" => "nrn_test123", "anthropic" => "sk-should-be-ignored"}})
       agent = create_agent(tenant)
 
       Fake.set_responses([
@@ -30,8 +27,8 @@ defmodule Norns.Runtime.TenantIsolationTest do
       ])
 
       Phoenix.PubSub.subscribe(Norns.PubSub, "agent:#{agent.id}")
-      {:ok, _pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
-      AgentProcess.send_message(_pid, "test")
+      {:ok, pid} = AgentProcess.start_link(agent_id: agent.id, tenant_id: tenant.id)
+      AgentProcess.send_message(pid, "test")
 
       receive do
         {:completed, _} -> :ok
@@ -39,9 +36,10 @@ defmodule Norns.Runtime.TenantIsolationTest do
         5000 -> flunk("Did not complete")
       end
 
-      # Verify the Fake LLM was called with the tenant's key
+      # The test worker calls the fake with its own key, never the tenant's
       [call] = Fake.calls()
-      assert call.api_key == "sk-test-key"
+      assert call.api_key == "test-worker-key"
+      refute call.api_key == "sk-should-be-ignored"
     end
 
     test "tenant-scoped workers only receive tasks for their tenant" do

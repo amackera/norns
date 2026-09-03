@@ -29,20 +29,14 @@ defmodule Norns.Tenants do
     "nrn_" <> (:crypto.strong_rand_bytes(24) |> Base.url_encode64(padding: false))
   end
 
-  @doc "Find or create the default tenant, using ANTHROPIC_API_KEY from config."
+  @doc "Find or create the default tenant."
   def ensure_default_tenant do
     case get_tenant_by_slug("default") do
       %Tenant{} = t ->
         {:ok, t}
 
       nil ->
-        api_key = Application.get_env(:norns, :default_anthropic_api_key) || ""
-
-        create_tenant(%{
-          name: "Default",
-          slug: "default",
-          api_keys: %{"anthropic" => api_key}
-        })
+        create_tenant(%{name: "Default", slug: "default", api_keys: %{}})
     end
   end
 end

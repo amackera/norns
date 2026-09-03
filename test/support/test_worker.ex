@@ -75,7 +75,8 @@ defmodule Norns.TestWorker do
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp execute_llm(task) do
-    api_key = task.api_key
+    # The worker owns the provider key. The orchestrator never sends one.
+    api_key = "test-worker-key"
     model = task.model
     system_prompt = task.system_prompt
     messages = task.messages
