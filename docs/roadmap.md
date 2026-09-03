@@ -1,7 +1,7 @@
 # Norns Roadmap
 
 **Status:** v6
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-03 (v6.1: control plane relocated to the cloud app)
 
 Sequencing for the next phase of work. For what's already built and why, see
 `decision-log.md`. For the product direction this sequence serves, see
@@ -165,8 +165,9 @@ operational layer on top.
   tests, and CI on every PR: gofmt/vet/race tests plus a Linux Docker
   smoke test (`up --build`, loopback port, host-gateway reachability,
   `list`, `down` after manual removal).
-- **P2:** the managed product — control plane over the same driver
-  interface, prebuilt connector images, tunnels, snapshots, billing.
+- **P2:** the managed product — a control plane in the cloud app (Elixir,
+  see below) over a Fly Machines driver, prebuilt connector images,
+  tunnels, snapshots, billing. Volund itself needs nothing new for P2a.
 
 Two prerequisites in existing repos, both small — **both shipped
 2026-08-15**: `GET /api/v1/workers` (live) and the Python SDK serial-task
@@ -179,26 +180,26 @@ see the decision log.
 This is the "own the provisioner" commitment — managed deployments as the
 home for the tenant's capability layer and, later, builder output.
 
-**P2 shape (proposed 2026-09-03, not yet decided).** A separate
-long-running service in the volund repo (`volund serve`), not in core —
-core stays an orchestrator and volund stays closed. It talks to Norns as
-the tenant through the same API the CLI uses today. Four pieces:
-deployment records in Postgres (replacing the local state file); a
-secrets store encrypted at rest with a KMS key, write-only from the
-customer, decrypted only at container start; a reconciler that compares
-desired to actual state via the driver and heals the difference (Docker's
-restart policy still covers crashes on a host, the reconciler covers host
-loss, redeploys, secret rotation); and an API with the CLI's verbs, which
-the dashboard calls and the CLI gains a remote mode for. Host question
-resolved by starting with one VM running the control plane and Docker
-together, driver as a library; a Fly driver (machines are the hosts, no
-fleet to run) or a per-host agent mode comes with the second host.
-Sequence: P2a managed connectors (records, secrets, reconciler, prebuilt
-images, list/logs in the dashboard; customers bring an image, no build
-service), P2b managed gards (workspace, export, tunnel), P2c billing and
-snapshots. Customers hand over secrets to be hosted — unavoidable, same as
-every hosting platform; the self-host path stays the escape hatch for
-those who can't, since Norns never needs the secret.
+**P2 shape (decided 2026-09-03,** `decision-log.md` **§ The control plane
+is Elixir, in the cloud app).** The control plane is *not* a Go service in
+the volund repo. It lives in the private `norns-cloud` Phoenix app — core
+as a dependency, plus closed contexts, migrations, and LiveView pages —
+one deploy, same Postgres, extra tables. Volund stays the Go CLI: local
+dev, self-host operational layer, Docker driver, reference client for the
+open contract. Pieces, all Elixir: deployment records (Ecto; the record
+takes the shape of volund's `list --json`), a secrets context (Cloak,
+KMS key, write-only, decrypted only at machine start — the one stated
+exception to "Norns never sees secrets"), an Oban reconciler (desired vs
+actual, heals host loss, redeploys, secret rotation), and a Deployments
+page in the dashboard. Because the cloud app runs on Fly, the first
+driver is **Fly Machines** over Fly's API — no fleet, no host agent.
+Calling core contexts in-process means no tenant API key, so key scoping
+is off the P2a critical path. Sequence: **P2a** managed connectors
+(records, secrets, reconciler, Fly driver, prebuilt images, dashboard
+page; customers bring an image, no build service), **P2b** managed gards
+(workspace, export, tunnel), **P2c** billing and snapshots. Prerequisites
+that remain: SDK graceful shutdown (connectors get stopped and restarted
+routinely under a reconciler) and tenant self-serve.
 
 ### 7. Chains (`plan-chains.md`)
 
@@ -269,6 +270,8 @@ itself into a corner on any of them (`decision-log.md` § Cloud readiness):
 - **API key scoping** — one bearer token is full tenant power today; a hosted
   builder holding one is the trust problem the introspection toolkit was
   pruned for. Scoped keys are the pre-cloud form of the capability model.
+  Not on the P2a path: the control plane calls core in-process
+  (2026-09-03).
 - **Tenant self-serve** — signup → tenant → key issuance. Cloud-repo work.
 - **Retention plan** — cron-triggered agents generate events unboundedly;
   needed before cloud launch, not before growth forces it.

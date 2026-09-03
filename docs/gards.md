@@ -918,8 +918,9 @@ Secrets are read from `--env-file` at `up` and baked into container env;
 the state file (`~/.volund/state.json`) remembers the env-file
 *path*, never values, and nothing secret is ever sent to Norns. A driver
 interface (`docker` now; `fly`/`firecracker` later) keeps the managed
-service (a control plane driving the same interface) a Phase-3+ product,
-not a rewrite.
+service a Phase-3+ product, not a rewrite. *(Decided 2026-09-03: the
+control plane is Elixir in the cloud app, with a Fly Machines driver;
+volund stays the Go CLI and Docker driver — see `decision-log.md`.)*
 
 - **P0 — connectors:** `up <name> --build ./dir | --image ref --env-file
   .env`, `down`, `list`, `logs`, `restart`. `list` joins "container
@@ -931,9 +932,10 @@ not a rewrite.
   `GARD_ID`/`CLAIM_TOKEN` env → SDK claims on connect. Adds workspace
   copy-in, code extraction (git push / file copy), port mapping. No tunnels
   yet.
-- **P2 — managed:** control plane driving the driver interface on our
-  infrastructure, prebuilt connector images (`slack-connector`, …), tunnels,
-  snapshots, billing — the managed-connector product.
+- **P2 — managed:** a control plane in the cloud app driving the same
+  contract (Fly Machines first), prebuilt connector images
+  (`slack-connector`, …), tunnels, snapshots, billing — the
+  managed-connector product.
 
 ### Phase 3: Snapshots
 
