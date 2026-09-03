@@ -1,7 +1,7 @@
 # Norns Roadmap
 
-**Status:** v5
-**Last updated:** 2026-09-01
+**Status:** v6
+**Last updated:** 2026-09-03
 
 Sequencing for the next phase of work. For what's already built and why, see
 `decision-log.md`. For the product direction this sequence serves, see
@@ -16,8 +16,9 @@ provider-neutral LLM format, conversations, REST API + dashboard, multi-agent
 orchestration, and both SDKs published (Python on PyPI at 0.3.0 with gard
 support, Elixir on Hex). Norns itself is at **v0.5** ("agents are
 configuration"). Steps 1–5 below are shipped, and the provisioner (step 6)
-has its P0 and P1 landed — the sequence now adds one primitive on top of
-that foundation: chains (step 7).
+has its P0 and P1 landed and hardened, with CI and a machine-readable
+status seam in place for P2 — the sequence now adds one primitive on top
+of that foundation: chains (step 7).
 
 The v1 roadmap's "Now" tier is **done**: subagent allowlists shipped
 (`SubagentPolicy`), human-in-the-loop is fully wired (`ask_human` /
@@ -61,7 +62,7 @@ flowchart TB
     C["3 — Gards Phase 1 ✓<br/>registry + dispatch filter — shipped 2026-08-10"]
     D["4 — Fabricate toolkit ✓<br/>templates · scaffold AGENTS.md · --wait — shipped 2026-08-11"]
     E["5 — Inbound webhooks ✓<br/>POST /api/v1/hooks/:token · signatures — shipped 2026-08-13"]
-    F["6 — Provisioner (volund) ◐<br/>separate repo · P0 + P1 shipped 2026-08-16 · P2 managed product open"]
+    F["6 — Provisioner (volund) ◐<br/>separate repo · P0 + P1 shipped 2026-08-16 · hardened + CI + list --json 2026-09-03 · P2 managed product open"]
     G["7 — Chains<br/>ordered agent defs as tenant data · transactional advance · plan-chains.md"]
     A --> B --> C --> D --> E --> F --> G
 ```
@@ -151,6 +152,19 @@ operational layer on top.
 - **P1:** gard workloads — `up --gard` (create gard, inject
   `GARD_ID`/`CLAIM_TOKEN`), workspace copy-in, code extraction, port
   mapping.
+- **P1.5 (2026-09-03, shipped):** pre-P2 hardening and the seam the
+  control plane consumes. `down` tolerates an already-removed container
+  (state and gard still cleaned up); redeploy destroys the previous gard
+  instead of orphaning it and warns before discarding `/workspace`;
+  containers get a `host.docker.internal` host-gateway alias so injected
+  `NORNS_URL` works on the Linux engine, not just Docker Desktop;
+  published ports bind to loopback only; `list` matches workers on the
+  longest deployment name. New `internal/report` package joins state +
+  container + worker into one record, exposed as `list --json` and
+  `status <name> [--json]` (shape documented in `volund llms`). First
+  tests, and CI on every PR: gofmt/vet/race tests plus a Linux Docker
+  smoke test (`up --build`, loopback port, host-gateway reachability,
+  `list`, `down` after manual removal).
 - **P2:** the managed product — control plane over the same driver
   interface, prebuilt connector images, tunnels, snapshots, billing.
 
@@ -164,6 +178,27 @@ see the decision log.
 
 This is the "own the provisioner" commitment — managed deployments as the
 home for the tenant's capability layer and, later, builder output.
+
+**P2 shape (proposed 2026-09-03, not yet decided).** A separate
+long-running service in the volund repo (`volund serve`), not in core —
+core stays an orchestrator and volund stays closed. It talks to Norns as
+the tenant through the same API the CLI uses today. Four pieces:
+deployment records in Postgres (replacing the local state file); a
+secrets store encrypted at rest with a KMS key, write-only from the
+customer, decrypted only at container start; a reconciler that compares
+desired to actual state via the driver and heals the difference (Docker's
+restart policy still covers crashes on a host, the reconciler covers host
+loss, redeploys, secret rotation); and an API with the CLI's verbs, which
+the dashboard calls and the CLI gains a remote mode for. Host question
+resolved by starting with one VM running the control plane and Docker
+together, driver as a library; a Fly driver (machines are the hosts, no
+fleet to run) or a per-host agent mode comes with the second host.
+Sequence: P2a managed connectors (records, secrets, reconciler, prebuilt
+images, list/logs in the dashboard; customers bring an image, no build
+service), P2b managed gards (workspace, export, tunnel), P2c billing and
+snapshots. Customers hand over secrets to be hosted — unavoidable, same as
+every hosting platform; the self-host path stays the escape hatch for
+those who can't, since Norns never needs the secret.
 
 ### 7. Chains (`plan-chains.md`)
 
