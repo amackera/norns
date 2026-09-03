@@ -272,6 +272,19 @@ itself into a corner on any of them (`decision-log.md` § Cloud readiness):
   pruned for. Scoped keys are the pre-cloud form of the capability model.
   Not on the P2a path: the control plane calls core in-process
   (2026-09-03).
+
+**Core-as-a-dependency spike — done (2026-09-03).** `norns-cloud` (private
+repo) boots with `{:norns, path: "../norns", env: Mix.env()}`: its own
+endpoint carries core's sockets and static assets and `forward "/"`s to
+`NornsWeb.Router` after cloud routes; core's endpoint runs `server: false`.
+One Postgres, two migration dirs (core's first, via `Application.app_dir`
+in both the mix alias and the release task). No callable migrations module
+was needed. Core changes required: one — an `extra_nav` config hook in the
+app layout so cloud pages appear in the dashboard nav. Gotchas: cloud's
+`mix.lock` must match core's for shared deps (a newer Oban wanted a schema
+migration core doesn't ship); core's `test/support` only exists when the dep
+is compiled in the test env. First cloud table: `deployments`, shaped like
+volund's `list --json` record, with a Deployments page.
 - **Tenant self-serve** — signup → tenant → key issuance. Cloud-repo work.
 - **Retention plan** — cron-triggered agents generate events unboundedly;
   needed before cloud launch, not before growth forces it.
